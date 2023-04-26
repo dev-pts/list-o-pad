@@ -1,0 +1,54 @@
+: #operators
+	{
+	}
+
+	unary: '+', '-'
+
+	binary_left_to_right: '*', '/'
+	binary_left_to_right: '+', '-'
+	binary_left_to_right: '=='
+
+	binary_right_to_left: '='
+
+top:
+	tlist:
+		listof: #optional
+			$expr
+
+expr:
+	oneof:
+		oneof: @expr
+			tree: @define
+				identifier: 'define'
+				call:
+					identifier: @symbol
+					listof: @lambda
+						identifier: @symbol
+				listof: @lambda_close
+					$expr
+			seqof:
+				tree: @if
+					identifier: 'if'
+					$expr
+					$expr
+				tree: #optional
+					identifier: 'else'
+					listof:
+						$expr
+			binary:
+				operator: @operator
+				$expr
+				$expr
+			unary:
+				operator: @operator
+				$expr
+			call:
+				identifier: @symbol
+				listof:
+					$expr
+			list:
+				$expr: #optional
+		oneof: @symbol
+			identifier
+			number
+		string: @string

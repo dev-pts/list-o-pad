@@ -1,0 +1,29 @@
+html:
+	xmlns="http://www.w3.org/1999/xhtml"
+	i'xml:lang'="en"
+	lang="en"
+
+	head:
+		title: "An example page"
+	body:
+		h1: id="greeting", i'bold-text'
+			"   Hi, there!
+				^--Multiline string :)
+				123^--
+				   ^--
+			"
+			"one more string"
+		p: "This is just an >>example<< to show XHTML & SXML."
+		p: align="center"
+			img:
+				src="pages.gif"
+				width="384"
+				height="245"
+				alt="site map"
+				usemap="#sitemap"
+				border="0"
+		table: border="1", cellpadding="10", width="80%"
+			tr: align="center", th(rowspan="2", "Year"), th(colspan="3", "Sales")
+			tr: align="center", th("North"), th("South"), th("Total")
+			tr: align="center", td("2000"), td("$10M"), td("$8M"), td("$18M")
+			tr: align="center", td("2001"), td("$14M"), td("$11M"), td("$25M")

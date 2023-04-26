@@ -1,0 +1,45 @@
+: #operators
+	{
+	}
+
+	binary_left_to_right: '='
+
+top:
+	tlist:
+		oneof:
+			tree: $html
+			call: $html
+
+html:
+	seqof: @html
+		identifier: 'html'
+		$attributes: #optional
+		$children: #optional
+
+attributes:
+	listof: @attr_separator
+		$name
+		binary: @attr_assign
+			operator: '='
+			$name
+			string: @print
+
+children:
+	listof:
+		oneof:
+			tree: $node
+			call: $node
+		string: @iprintln
+
+node:
+	seqof: @node
+		$name
+		$attributes: #optional
+		$children: #optional
+
+name:
+	oneof:
+		identifier: @print
+		fstring:
+			identifier: 'i'
+			string: @print

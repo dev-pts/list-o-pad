@@ -1,0 +1,87 @@
+` Pseudo HDL to Verilog translator
+
+: #operators
+	{
+	}
+
+	unary:
+		'++', '--'
+		'!', '~'
+		'+', '-'
+		'*', '/'
+		'&', '|', '^'
+
+	binary_left_to_right: '*', '/', '%'
+	binary_left_to_right: '+', '-'
+	binary_left_to_right: '<<', '>>'
+	binary_left_to_right: '<', '>', '<=', '>='
+	binary_left_to_right: '==', '!='
+	binary_left_to_right: '&'
+	binary_left_to_right: '^'
+	binary_left_to_right: '|'
+	binary_left_to_right: '&&'
+	binary_left_to_right: '||'
+
+	binary_right_to_left:
+		'='
+		'+=', '-='
+		'*=', '/=', '%='
+		'>>=', '<<='
+		'~=', '&=', '|=', '^='
+
+top:
+	tlist:
+		tree: @module
+			identifier: 'module'
+			identifier: @str
+			tree:
+				identifier: 'port'
+				listof: @list
+					$port
+			listof: @listn
+				$statement
+
+direction:
+	oneof: @dir
+		identifier: 'in'
+		identifier: 'out'
+
+port:
+	oneof:
+		tree: @port
+			identifier: @str
+			oneof:
+				$direction
+				aref:
+					$direction
+					number: @dim
+
+statement:
+	binary: @assign
+		operator: @str, '='
+		$lhs
+		$expr
+
+expr:
+	oneof:
+		identifier: @str
+		number: @str
+		unary: @unary
+			operator: @str
+			$expr
+		binary: @binary
+			operator: @str
+			$expr
+			$expr
+		slist: @bus
+			listof: @list
+				$expr
+		list: @parens
+			$expr
+
+lhs:
+	oneof:
+		identifier: @str
+		slist: @bus
+			listof: @list
+				$lhs

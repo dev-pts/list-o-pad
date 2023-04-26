@@ -1,0 +1,40 @@
+: #operators
+	{
+	}
+
+	unary: '+', '-'
+	binary_left_to_right: '*', '/'
+	binary_left_to_right: '+', '-'
+
+top:
+	tlist:
+		listof:
+			$expr: @print
+
+expr:
+	oneof:
+		number: @num
+		unary: @bin_minus
+			operator: '-'
+			$expr
+		unary: @bin_plus
+			operator: '+'
+			$expr
+		binary: @plus
+			operator: '+'
+			$expr
+			$expr
+		binary: @minus
+			operator: '-'
+			$expr
+			$expr
+		binary: @mul
+			operator: '*'
+			$expr
+			$expr
+		binary: @div
+			operator: '/'
+			$expr
+			$expr
+		list:
+			$expr

@@ -1,0 +1,4 @@
+list:
+	item: id=1, value=17, "this item"
+	item: id=2, value=23, selected, "that item"
+	item: id=3, value=42, "the other item"

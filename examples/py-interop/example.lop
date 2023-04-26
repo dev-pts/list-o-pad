@@ -1,0 +1,8 @@
+module: full_adder
+	port:
+		a: in[4]
+		b: in[4]
+		c_in: in
+		c_out: out
+		sum: out[4]
+	{ c_out, sum } = a + b + c_in

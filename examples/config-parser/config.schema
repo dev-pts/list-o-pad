@@ -1,0 +1,24 @@
+: #operators
+	{
+	}
+
+	binary_left_to_right: '='
+
+top:
+	tlist:
+		tree:
+			identifier: 'list'
+			listof:
+				tree: @item
+					identifier: 'item'
+					binary:
+						operator: '='
+						identifier: 'id'
+						number: @id
+					binary:
+						operator: '='
+						identifier: 'value'
+						number: @value
+					identifier: #optional, @selected
+						'selected'
+					string: @text
