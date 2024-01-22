@@ -806,7 +806,7 @@ int LOP_getAST(struct LOP_ASTNode **root, const char *string, struct LOP_Operato
 							if (c->list.prio > ot->prio) {
 								break;
 							} else if (c->list.prio == ot->prio) {
-								if (ot->type == LOP_OPERATOR_LEFT) {
+								if (ot->type == LOP_OPERATOR_RIGHT) {
 									break;
 								}
 							}
