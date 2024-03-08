@@ -137,6 +137,9 @@ static void token_set_list_type(struct State *state, int c)
 
 static int cur_char(struct State *state)
 {
+	if (state->c == state->end) {
+		return 0;
+	}
 	return state->string[state->c];
 }
 
@@ -589,7 +592,7 @@ static struct LOP_OperatorTable *ot_find(struct LOP_OperatorTable *optable, cons
 	return NULL;
 }
 
-int LOP_getAST(struct LOP_ASTNode **root, const char *string, struct LOP_OperatorTable *unary, struct LOP_OperatorTable *binary, LOP_error_cb_t error_cb)
+int LOP_getAST(struct LOP_ASTNode **root, const char *string, size_t len, struct LOP_OperatorTable *unary, struct LOP_OperatorTable *binary, LOP_error_cb_t error_cb)
 {
 	struct State state = {
 		.loc = {
@@ -597,7 +600,7 @@ int LOP_getAST(struct LOP_ASTNode **root, const char *string, struct LOP_Operato
 			.lineno = 1,
 		},
 		.string = string,
-		.end = string ? strlen(string) : 0,
+		.end = len,
 		.error_cb = error_cb,
 	};
 	struct Token *t = &state.token;
@@ -612,7 +615,7 @@ int LOP_getAST(struct LOP_ASTNode **root, const char *string, struct LOP_Operato
 	int rc = 0;
 	union LOP_Error error;
 
-	if (!string) {
+	if (len == 0) {
 		return 0;
 	}
 
@@ -1010,7 +1013,10 @@ static void error_show_string(const char *ptr, size_t len, struct LOP_Location l
 		}
 	}
 
-	assert(i < len);
+	if (i >= len) {
+		fprintf(stderr, "at the end of file\n");
+		return;
+	}
 
 	fprintf(stderr, "%li: ", lineno);
 	for (; i < len; i++) {

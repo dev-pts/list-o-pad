@@ -155,7 +155,7 @@ struct LOP {
 };
 
 /* AST functions */
-int LOP_getAST(struct LOP_ASTNode **root, const char *string,
+int LOP_getAST(struct LOP_ASTNode **root, const char *string, size_t len,
 	struct LOP_OperatorTable *unary, struct LOP_OperatorTable *binary,
 	LOP_error_cb_t error_cb);
 void LOP_delAST(struct LOP_ASTNode *root);
@@ -170,8 +170,8 @@ struct LOP_ASTNode *LOP_list_tail(struct LOP_ASTNode *n);
 int LOP_handler_eval(struct LOP_HandlerList hl, unsigned child, void *param);
 bool LOP_handler_evalable(struct LOP_HandlerList hl, unsigned child);
 
-int LOP_schema_init(struct LOP *lop, const char *user_schema);
-int LOP_schema_parse_source(void *ctx, struct LOP *lop, const char *string, const char *key);
+int LOP_schema_init(struct LOP *lop, const char *user_schema, size_t len);
+int LOP_schema_parse_source(void *ctx, struct LOP *lop, const char *string, size_t len, const char *key);
 void LOP_schema_deinit(struct LOP *lop);
 
 /* Standard callbacks */

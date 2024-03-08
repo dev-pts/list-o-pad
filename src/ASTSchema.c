@@ -1440,7 +1440,7 @@ void LOP_schema_deinit(struct LOP *lop)
 	free(lop->binary);
 }
 
-int LOP_schema_parse_source(void *ctx, struct LOP *lop, const char *string, const char *key)
+int LOP_schema_parse_source(void *ctx, struct LOP *lop, const char *string, size_t len, const char *key)
 {
 	struct KV *kv = lop->kv;
 	struct LOP_ASTNode *ast;
@@ -1460,7 +1460,7 @@ int LOP_schema_parse_source(void *ctx, struct LOP *lop, const char *string, cons
 	}
 
 	schema = kv->children[kv_key].value;
-	rc = LOP_getAST(&ast, string, lop->unary, lop->binary, lop->error_cb);
+	rc = LOP_getAST(&ast, string, len, lop->unary, lop->binary, lop->error_cb);
 	if (rc < 0) {
 		return rc;
 	}
@@ -1487,7 +1487,7 @@ int LOP_schema_parse_source(void *ctx, struct LOP *lop, const char *string, cons
 	return rc;
 }
 
-int LOP_schema_init(struct LOP *lop, const char *user_schema)
+int LOP_schema_init(struct LOP *lop, const char *user_schema, size_t len)
 {
 	struct LOP root_schema = root_schema_init();
 	struct Runtime r = {
@@ -1502,7 +1502,7 @@ int LOP_schema_init(struct LOP *lop, const char *user_schema)
 	op_add(&lop->unary, &r.unary_count, NULL);
 	op_add(&lop->binary, &r.binary_count, NULL);
 
-	rc = LOP_schema_parse_source(&r, &root_schema, user_schema, "root");
+	rc = LOP_schema_parse_source(&r, &root_schema, user_schema, len, "root");
 
 	if (!rc) {
 		const char *err_key = kv_check(lop->kv);
