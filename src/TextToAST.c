@@ -52,6 +52,7 @@ struct State {
 			STRINGER_CLOSING,
 		} state;
 		int stop_indent;
+		int type;
 	} stringer;
 
 	LOP_error_cb_t error_cb;
@@ -184,7 +185,7 @@ static int next_token(struct State *state)
 		reset_buf(state);
 
 		while (cur_char(state) != 0) {
-			if (!escape && (cur_char(state) == '"' || cur_char(state) == '\'')) {
+			if (!escape && cur_char(state) == state->stringer.type) {
 				break;
 			}
 
@@ -218,7 +219,7 @@ static int next_token(struct State *state)
 					continue;
 				}
 
-				if (cur_char(state) == 0 || cur_char(state) == '"' || cur_char(state) == '\'') {
+				if (cur_char(state) == 0 || cur_char(state) == state->stringer.type) {
 					break;
 				}
 
@@ -353,6 +354,7 @@ static int next_token(struct State *state)
 			} else {
 				token_set_type(state, TOKEN_LIST_OPEN);
 				state->stringer.state = STRINGER_GOBBLE;
+				state->stringer.type = cur_char(state);
 			}
 			token_set_list_type(state, cur_char(state));
 			break;
