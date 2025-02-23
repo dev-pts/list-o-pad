@@ -426,11 +426,12 @@ static bool check_seqof(struct LOP_HandlerList *hl, struct LOP_ASTNode **n, stru
 
 static bool check_entry(struct LOP_HandlerList *hl, struct LOP_ASTNode **n, struct SchemaNode *c, struct LOP_ASTNode **err, struct KV *kv)
 {
+	struct LOP_ASTNode *n_orig = *n;
 	struct LOP_ASTNode *nn = *n;
 	int hl_count = hl->count;
 
 	if (!nn) {
-		goto mismatch;
+		return false;
 	}
 
 	handler_add(hl, c, nn);
@@ -503,6 +504,7 @@ static bool check_entry(struct LOP_HandlerList *hl, struct LOP_ASTNode **n, stru
 	return true;
 
 mismatch:
+	*n = n_orig;
 	handler_resize(hl, hl_count);
 	return false;
 }
