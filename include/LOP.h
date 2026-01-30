@@ -19,39 +19,6 @@ typedef void (*LOP_cb_dtor_t)(struct LOP_CB *cb);
 
 typedef void (*LOP_error_cb_t)(enum LOP_ErrorType type, union LOP_Error error);
 
-enum LOP_ListType {
-	// :;
-	LOP_LIST_TLIST = 1 << 0,
-	// ()
-	LOP_LIST_LIST = 1 << 1,
-	// []
-	LOP_LIST_AREF = 1 << 2,
-	// {}
-	LOP_LIST_STRUCT = 1 << 3,
-	// implicit list for 'a`op`b' and '`op`c'
-	LOP_LIST_OPERATOR = 1 << 4,
-	// '', ""
-	LOP_LIST_STRING = 1 << 5,
-};
-
-enum LOP_ListOp {
-	LOP_LIST_NOP = 0,
-	LOP_LIST_CALL,
-	LOP_LIST_BINARY,
-	LOP_LIST_UNARY,
-};
-
-enum LOP_SymbolType {
-	// starts with letter and until stop
-	LOP_SYMBOL_IDENTIFIER,
-	// starts with number and until stop
-	LOP_SYMBOL_NUMBER,
-	// starts and ends with quotes " or '
-	LOP_SYMBOL_STRING,
-	// non-letters, numbers and punctuations
-	LOP_SYMBOL_OPERATOR,
-};
-
 struct LOP_Location {
 	int lineno;
 	int charno;
@@ -59,28 +26,46 @@ struct LOP_Location {
 
 struct LOP_ASTNode {
 	enum LOP_ASTNodeType {
-		LOP_AST_SYMBOL,
-		LOP_AST_LIST,
+		/* () */
+		LOP_TYPE_LIST_ROUND,
+		/* {} */
+		LOP_TYPE_LIST_CURLY,
+		/* [] */
+		LOP_TYPE_LIST_SQUARE,
+		/* :; */
+		LOP_TYPE_LIST_COLON,
+		/* xxx"", xxx'' */
+		LOP_TYPE_LIST_STRING,
+		/* Convenient indicator */
+		LOP_TYPE_LIST_LAST_CALLABLE,
+		/* virtual list for operators */
+		LOP_TYPE_LIST_OPERATOR_UNARY,
+		LOP_TYPE_LIST_OPERATOR_BINARY,
+		/* Convenient indicator */
+		LOP_TYPE_LIST_LAST,
+
+		LOP_TYPE_OPERATOR,
+		LOP_TYPE_ID,
+		LOP_TYPE_NUMBER,
+		LOP_TYPE_STRING,
+		LOP_TYPE_NIL,
 	} type;
 
 	struct LOP_ASTNode *parent;
-	struct LOP_ASTNode *prev;
 	struct LOP_ASTNode *next;
 
+	/* Needed for closing colon lists */
+	int indent;
+
 	union {
-		struct LOP_ASTSymbol {
-			enum LOP_SymbolType type;
+		struct {
 			char *value;
 		} symbol;
 
-		struct LOP_ASTList {
-			enum LOP_ListType type;
-			enum LOP_ListOp op;
+		struct {
 			struct LOP_ASTNode *head;
 			struct LOP_ASTNode *tail;
-			int count;
-			int indent;
-			bool multiline;
+			int call;
 			int prio;
 		} list;
 	};
@@ -92,6 +77,7 @@ struct LOP_OperatorTable {
 	const char *value;
 	int prio;
 	enum LOP_OperatorType {
+		LOP_OPERATOR_NONE,
 		LOP_OPERATOR_LEFT,
 		LOP_OPERATOR_RIGHT,
 	} type;

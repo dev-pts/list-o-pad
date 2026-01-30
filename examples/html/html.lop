@@ -8,10 +8,10 @@ html:
 	body:
 		h1: id="greeting", i'bold-text'
 			"   Hi, there!
-				^--Multiline string :)
-				123^--
-				   ^--
-			"
+^--Multiline string :)
+123^--
+   ^--
+"
 			"one more string"
 		p: "This is just an >>example<< to show XHTML & SXML."
 		p: align="center"
