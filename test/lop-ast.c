@@ -18,7 +18,8 @@ int main(int argc, char *argv[])
 		{ /* sentinel */ },
 	};
 	struct LOP_OperatorTable binary[] = {
-		{ "=", 1, LOP_OPERATOR_LEFT },
+		{ "+", 1, LOP_OPERATOR_LEFT },
+		{ "=", 2, LOP_OPERATOR_LEFT },
 		{ /* sentinel */ },
 	};
 	struct LOP lop = {

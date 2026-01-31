@@ -88,15 +88,6 @@ static void operator_close(void)
 	}
 }
 
-static void close_operator_or_colon(void)
-{
-	while (last_list_is_operator() || last_list->type == LOP_TYPE_LIST_COLON) {
-		last_list = last_list->parent;
-	}
-	last_list = last_list->parent;
-	last_token = last_list->list.tail;
-}
-
 static void close_vert_colon(void)
 {
 	while (vert_colon_closed()) {
@@ -114,12 +105,12 @@ static void close_vert_colon(void)
 
 static void push_token(struct LOP_ASTNode *t)
 {
-	t->parent = last_list;
-
 	close_vert_colon();
 
 	newline_was = 0;
 	continue_was = 0;
+
+	t->parent = last_list;
 
 	if (last_token) {
 		if (t->type < LOP_TYPE_LIST_LAST) {
@@ -243,7 +234,11 @@ static void l_push_token(enum LOP_ASTNodeType t)
 
 static void l_list_close(void)
 {
-	close_operator_or_colon();
+	while (last_list_is_operator() || last_list->type == LOP_TYPE_LIST_COLON) {
+		last_list = last_list->parent;
+	}
+	last_list = last_list->parent;
+	last_token = last_list->list.tail;
 }
 
 static void l_tlist_close(void)
