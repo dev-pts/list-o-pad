@@ -10,6 +10,7 @@ enum Token {
 	L_ID,
 	L_SQUOTE,
 	L_DQUOTE,
+	L_QQUOTE,
 	L_STR_APPEND,
 	L_STR_CONTINUE,
 	L_QUOTE_CLOSE,
@@ -26,6 +27,7 @@ enum Token {
 	L_NEWLINE,
 	L_CONTINUE,
 	L_COMMA,
+	L_UNKNOWN,
 };
 
 %}
@@ -53,14 +55,15 @@ COMMA ","
 
 DQUOTE "\""
 SQUOTE "'"
-COMMENT `.+
+QQUOTE "`"
+COMMENT \\\\.*
 
 INDENT "\t"
 NEWLINE "\n"
-CONTINUE "\\"
+CONTINUE \\
 WHITESPACE [ ]+
 
-%x str_sq str_dq
+%x str_sq str_dq str_qq
 
 %%
 
@@ -120,6 +123,28 @@ WHITESPACE [ ]+
 }
 
 <str_dq>{DQUOTE} {
+	BEGIN(INITIAL);
+	return L_QUOTE_CLOSE;
+}
+
+{QQUOTE} {
+	BEGIN(str_qq);
+	return L_QQUOTE;
+}
+
+<str_qq>[^\\`]+ {
+	return L_STR_APPEND;
+}
+
+<str_qq>\\\n {
+	return L_STR_CONTINUE;
+}
+
+<str_qq>\\. {
+	return L_STR_APPEND;
+}
+
+<str_qq>{QQUOTE} {
 	BEGIN(INITIAL);
 	return L_QUOTE_CLOSE;
 }
@@ -184,10 +209,8 @@ WHITESPACE [ ]+
 	/* eat up whitespace */
 }
 
-[\\]. {
-	printf("ERROR\n");
+. {
+	return L_UNKNOWN;
 }
-
-. printf("Unrecognized character: %s\n", yytext);
 
 %%

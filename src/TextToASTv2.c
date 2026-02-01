@@ -17,15 +17,11 @@ static struct LOP_ASTNode *last_token;
 static int newline_was;
 static int continue_was;
 
-static void error(struct LOP_ASTNode *t)
-{
-	printf("SYNTAX ERROR at %i, %i\n", t->loc.lineno, t->loc.charno);
-	abort();
-}
-
 static struct LOP_ASTNode *create_token(enum LOP_ASTNodeType type)
 {
 	struct LOP_ASTNode *t = calloc(1, sizeof(*t));
+
+	assert(t);
 
 	t->type = type;
 	t->loc.lineno = yylineno;
@@ -125,7 +121,7 @@ static void push_token(struct LOP_ASTNode *t)
 			last_list->list.head = last_list->list.tail = t;
 			last_token = NULL;
 		} else {
-			error(t);
+			assert(0);
 		}
 	} else {
 		if (last_list->list.tail) {
@@ -155,6 +151,8 @@ static void l_str_open()
 static void l_str_append()
 {
 	last_token->symbol.value = realloc((char *)last_token->symbol.value, strlen(last_token->symbol.value) + yyleng + 1);
+	assert(last_token->symbol.value);
+
 	strcat((char *)last_token->symbol.value, yytext);
 }
 
@@ -241,11 +239,14 @@ static void l_push_token(enum LOP_ASTNodeType t)
 	push_token(create_token(t));
 }
 
-static void l_list_close(void)
+static void l_list_close(enum LOP_ASTNodeType t)
 {
 	while (last_list_is_operator() || last_list->type == LOP_TYPE_LIST_COLON) {
 		last_list = last_list->parent;
 	}
+
+	assert(last_list->type == t);
+
 	last_list = last_list->parent;
 	last_token = last_list->list.tail;
 }
@@ -254,6 +255,8 @@ static void l_tlist_close(void)
 {
 	close_vert_colon();
 	operator_close();
+
+	assert(last_list->type == LOP_TYPE_LIST_COLON);
 
 	last_list = last_list->parent;
 	last_token = last_list->list.tail;
@@ -319,6 +322,7 @@ int LOP_getAST(struct LOP_ASTNode **root, const char *string, size_t len, struct
 			break;
 		case L_SQUOTE:
 		case L_DQUOTE:
+		case L_QQUOTE:
 			l_str_open();
 			break;
 		case L_STR_APPEND:
@@ -345,9 +349,13 @@ int LOP_getAST(struct LOP_ASTNode **root, const char *string, size_t len, struct
 			l_push_token(LOP_TYPE_LIST_COLON);
 			break;
 		case L_LIST_CLOSE:
+			l_list_close(LOP_TYPE_LIST_ROUND);
+			break;
 		case L_CLIST_CLOSE:
+			l_list_close(LOP_TYPE_LIST_CURLY);
+			break;
 		case L_BLIST_CLOSE:
-			l_list_close();
+			l_list_close(LOP_TYPE_LIST_SQUARE);
 			break;
 		case L_TLIST_CLOSE:
 			l_tlist_close();
@@ -363,6 +371,9 @@ int LOP_getAST(struct LOP_ASTNode **root, const char *string, size_t len, struct
 			break;
 		case L_COMMA:
 			l_comma();
+			break;
+		case L_UNKNOWN:
+			assert(0);
 			break;
 		default:
 			assert(0);
