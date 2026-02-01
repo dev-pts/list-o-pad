@@ -1,7 +1,7 @@
 SRCS := src/TextToASTv2.c src/AST.c src/ASTSchema.c util/FileMap.c
 OBJS := $(SRCS:.c=.o)
 
-CFLAGS := -Wall -Iinclude/ -fPIC
+CFLAGS := -Wall -O2 -Iinclude/ -fPIC
 
 all: liblop.so liblop.a test/lop-schema test/lop-ast
 

@@ -1,32 +1,20 @@
 #include <LOP.h>
 #include "FileMap.h"
 
-static int cb_dummy(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg)
-{
-	return 0;
-}
-
-static int resolve(struct LOP *lop, const char *key, struct LOP_CB *cb)
-{
-	cb->func = cb_dummy;
-	return 0;
-}
+#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof(*(arr)))
 
 int main(int argc, char *argv[])
 {
-	struct LOP_OperatorTable unary[] = {
-		{ /* sentinel */ },
+	struct LOP_Operator op[] = {
+		{ "$", 0, LOP_OPERATOR_UNARY },
+		{ ".", 0, LOP_OPERATOR_LTR },
+		{ "-", 1, LOP_OPERATOR_UNARY },
+		{ "+", 2, LOP_OPERATOR_LTR },
+		{ "=", 3, LOP_OPERATOR_RTL },
 	};
-	struct LOP_OperatorTable binary[] = {
-		{ "+", 1, LOP_OPERATOR_LEFT },
-		{ "=", 2, LOP_OPERATOR_LEFT },
-		{ /* sentinel */ },
-	};
-	struct LOP lop = {
-		.resolve = resolve,
-		.error_cb = LOP_default_error_cb,
-		.unary = unary,
-		.binary = binary,
+	struct LOP_OperatorTable ot = {
+		.size = ARRAY_SIZE(op),
+		.data = op,
 	};
 	struct FileMap source;
 	struct LOP_ASTNode *ast;
@@ -34,7 +22,7 @@ int main(int argc, char *argv[])
 
 	source = map_file(argv[1]);
 
-	rc = LOP_getAST(&ast, source.data, source.len, lop.unary, lop.binary, lop.error_cb);
+	rc = LOP_getAST(&ast, source.data, source.len, &ot, LOP_default_error_cb);
 	if (rc < 0) {
 		return rc;
 	}

@@ -221,19 +221,3 @@ void LOP_dump_ast(struct LOP_ASTNode *root, bool pretty)
 	dump_item(root, 1);
 	printf("\n");
 }
-
-void LOP_op_prepend(struct LOP_OperatorTable **table, int *cnt, struct LOP_OperatorTable *op)
-{
-	if (*cnt > 0) {
-		struct LOP_OperatorTable *t = &(*table)[*cnt - 1];
-		assert(op->value);
-
-		*t = *op;
-		t->value = strdup(t->value);
-		assert(t->value);
-	}
-	*table = realloc(*table, (*cnt + 1) * sizeof(**table));
-	assert(table);
-	(*table)[*cnt] = (struct LOP_OperatorTable) {};
-	(*cnt)++;
-}

@@ -166,27 +166,37 @@ static void l_str_close()
 	}
 }
 
-static struct LOP_OperatorTable *ot_find(struct LOP_OperatorTable *optable, const char *value)
+static struct LOP_Operator *op_find(struct LOP_OperatorTable *table, const char *value, unsigned mask)
 {
-	for (struct LOP_OperatorTable *ot = optable; ot->value; ot++) {
-		if (!strcmp(ot->value, value)) {
-			return ot;
+	for (int i = 0; i < table->size; i++) {
+		struct LOP_Operator *op = &table->data[i];
+
+		if ((op->type & mask) == 0) {
+			continue;
+		}
+		if (!strcmp(op->value, value)) {
+			return op;
 		}
 	}
 	return NULL;
 }
 
-static void l_operator(struct LOP_OperatorTable *unary, struct LOP_OperatorTable *binary)
+static void l_operator(struct LOP_OperatorTable *operator_table)
 {
 	struct LOP_ASTNode *t = create_token(LOP_TYPE_OPERATOR);
-	struct LOP_OperatorTable *ot = NULL;
+	struct LOP_Operator *op = NULL;
 
 	if (last_token) {
-		assert(binary);
-		ot = ot_find(binary, yytext);
-		assert(ot);
+		op = op_find(operator_table, yytext, LOP_OPERATOR_BINARY_MASK);
+		assert(op);
 
-		while (last_list->type > LOP_TYPE_LIST_LAST_CALLABLE && last_list->list.prio < ot->prio) {
+		while (last_list->type > LOP_TYPE_LIST_LAST_CALLABLE) {
+			if (last_list->list.prio > op->prio) {
+				break;
+			}
+			if (last_list->list.prio == op->prio && op->type == LOP_OPERATOR_RTL) {
+				break;
+			}
 			last_list = last_list->parent;
 			last_token = last_list->list.tail;
 		}
@@ -203,15 +213,14 @@ static void l_operator(struct LOP_OperatorTable *unary, struct LOP_OperatorTable
 		last_list = t->parent;
 		last_token = NULL;
 	} else {
+		op = op_find(operator_table, yytext, LOP_OPERATOR_UNARY);
+		assert(op);
+
 		push_token(t);
 		push_token(create_token(LOP_TYPE_LIST_OPERATOR_UNARY));
-
-		assert(unary);
-		ot = ot_find(unary, yytext);
-		assert(ot);
 	}
 
-	last_list->list.prio = ot->prio;
+	last_list->list.prio = op->prio;
 }
 
 static void l_push_token(enum LOP_ASTNodeType t)
@@ -285,7 +294,7 @@ int yywrap() {
 	return 1;
 }
 
-int LOP_getAST(struct LOP_ASTNode **root, const char *string, size_t len, struct LOP_OperatorTable *unary, struct LOP_OperatorTable *binary, LOP_error_cb_t error_cb)
+int LOP_getAST(struct LOP_ASTNode **root, const char *string, size_t len, struct LOP_OperatorTable *operator_table, LOP_error_cb_t error_cb)
 {
 	enum Token t;
 
@@ -321,7 +330,7 @@ int LOP_getAST(struct LOP_ASTNode **root, const char *string, size_t len, struct
 			l_str_close();
 			break;
 		case L_OPERATOR:
-			l_operator(unary, binary);
+			l_operator(operator_table);
 			break;
 		case L_LIST_OPEN:
 			l_push_token(LOP_TYPE_LIST_ROUND);

@@ -5,6 +5,8 @@
 
 #include <LOP.h>
 
+#include "KV.c"
+
 #define KV_ADD(name, sn_ctor) \
 	do { \
 		struct SchemaNode *p = NULL; \
@@ -128,16 +130,6 @@
 	do { \
 		c->cb.func = handler; \
 	} while (0)
-
-typedef void (*free_value_t)(void *arg);
-
-struct KV {
-	int count;
-	struct KVEntry {
-		char *key;
-		void *value;
-	} *children;
-};
 
 struct SchemaNode {
 	enum SchemaNodeType {
@@ -298,65 +290,6 @@ static void handler_add(struct LOP_HandlerList *c, struct SchemaNode *sn, struct
 	handler_resize(c, c->count + 1);
 
 	c->handler[c->count - 1] = (struct LOP_Handler) { sn, n };
-}
-
-static int kv_add(struct KV *kv, const char *key, void *value)
-{
-	char *nkey;
-
-	for (int i = 0; i < kv->count; i++) {
-		if (!strcmp(kv->children[i].key, key)) {
-			assert(kv->children[i].value == NULL);
-			assert(value);
-			kv->children[i].value = value;
-			return kv->count;
-		}
-	}
-
-	kv->count++;
-	kv->children = realloc(kv->children, kv->count * sizeof(*kv->children));
-	assert(kv->children);
-
-	nkey = strdup(key);
-	assert(nkey);
-
-	kv->children[kv->count - 1] = (struct KVEntry) { nkey, value };
-
-	return kv->count;
-}
-
-static struct KV *kv_alloc(void)
-{
-	struct KV *kv = calloc(1, sizeof(*kv));
-	assert(kv);
-	return kv;
-}
-
-static void kv_free(struct KV *kv, free_value_t free_value)
-{
-	for (int i = 0; i < kv->count; i++) {
-		free(kv->children[i].key);
-		if (free_value) {
-			free_value(kv->children[i].value);
-		}
-	}
-	free(kv->children);
-	free(kv);
-}
-
-static int kv_get(struct KV *kv, const char *key, bool alloc)
-{
-	for (int i = 0; i < kv->count; i++) {
-		if (!strcmp(kv->children[i].key, key)) {
-			return i;
-		}
-	}
-
-	if (alloc) {
-		return kv_add(kv, key, NULL) - 1;
-	}
-
-	return -1;
 }
 
 static bool check_entry(struct LOP_HandlerList *hl, struct LOP_ASTNode **n, struct SchemaNode *c, struct LOP_ASTNode **err, struct KV *kv);
@@ -606,7 +539,7 @@ static void sn_set_seqof(struct SchemaNode *c)
 static void sn_set_ref(struct SchemaNode *c, const char *name, struct KV *kv)
 {
 	c->sn_type = SN_TYPE_REF;
-	c->ref = kv_get(kv, name, true);
+	c->ref = kv_get_index(kv, name, true);
 	assert(c->ref >= 0);
 	c->cb.func = LOP_cb_default;
 }
@@ -627,16 +560,6 @@ static void sn_set_last(struct SchemaNode *c)
 	c->last = true;
 }
 
-static const char *kv_check(struct KV *kv)
-{
-	for (int i = 0; i < kv->count; i++) {
-		if (!kv->children[i].value) {
-			return kv->children[i].key;
-		}
-	}
-	return NULL;
-}
-
 struct Runtime {
 	struct LOP *lop;
 
@@ -648,58 +571,56 @@ struct Runtime {
 	struct SchemaNode *c;
 };
 
-static void op_prepend(struct LOP_OperatorTable **table, int *cnt, struct LOP_OperatorTable *op)
+static void ot_add(struct LOP_OperatorTable *table, const char *operator_string, int prio, unsigned type)
 {
-	if (*cnt > 0) {
-		struct LOP_OperatorTable *t = &(*table)[*cnt - 1];
-		assert(op->value);
+	struct LOP_Operator *op;
 
-		*t = *op;
-		t->value = strdup(t->value);
-		assert(t->value);
+	table->size++;
+	table->data = realloc(table->data, table->size * sizeof(*table->data));
+	assert(table->data);
+
+	op = &table->data[table->size - 1];
+
+	op->value = strdup(operator_string);
+	assert(op->value);
+	op->prio = prio;
+	op->type = type;
+}
+
+static void ot_destroy(struct LOP_OperatorTable *table)
+{
+	for (int i = 0; i < table->size; i++) {
+		free((void *)table->data[i].value);
 	}
-	*table = realloc(*table, (*cnt + 1) * sizeof(**table));
-	assert(table);
-	(*table)[*cnt] = (struct LOP_OperatorTable) {};
-	(*cnt)++;
+	free(table->data);
 }
 
 static int cb_unary(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg)
 {
 	struct Runtime *r = param;
 	struct LOP *lop = r->lop;
-	struct LOP_OperatorTable op = {
-		.value = LOP_symbol_value(n),
-		.prio = r->prio,
-		.type = 0,
-	};
 
-	op_prepend(&lop->unary, &r->unary_count, &op);
+	ot_add(&lop->operator_table, LOP_symbol_value(n), r->prio, LOP_OPERATOR_UNARY);
 	return 0;
 }
 
-static int cb_binary(struct Runtime *r, struct LOP_ASTNode *n, enum LOP_OperatorType optype)
+static int cb_binary(struct Runtime *r, struct LOP_ASTNode *n, unsigned optype)
 {
 	struct LOP *lop = r->lop;
-	struct LOP_OperatorTable op = {
-		.value = LOP_symbol_value(n),
-		.prio = r->prio,
-		.type = optype,
-	};
 
-	op_prepend(&lop->binary, &r->binary_count, &op);
+	ot_add(&lop->operator_table, LOP_symbol_value(n), r->prio, optype);
 	return 0;
 }
 
 static int cb_binary_lr(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg)
 {
-	cb_binary(param, n, LOP_OPERATOR_LEFT);
+	cb_binary(param, n, LOP_OPERATOR_LTR);
 	return 0;
 }
 
 static int cb_binary_rl(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg)
 {
-	cb_binary(param, n, LOP_OPERATOR_RIGHT);
+	cb_binary(param, n, LOP_OPERATOR_RTL);
 	return 0;
 }
 
@@ -960,17 +881,11 @@ static struct LOP root_schema_init(void)
 	struct LOP lop = {
 		.kv = kv_alloc(),
 	};
-	int unary_count = 0;
-	int binary_count = 0;
-
-	op_prepend(&lop.unary, &unary_count, NULL);
-	op_prepend(&lop.unary, &unary_count, &(struct LOP_OperatorTable) { "$", 0, 0 });
-	op_prepend(&lop.unary, &unary_count, &(struct LOP_OperatorTable) { "@", 0, 0 });
-	op_prepend(&lop.unary, &unary_count, &(struct LOP_OperatorTable) { "#", 0, 0 });
-
-	op_prepend(&lop.binary, &binary_count, NULL);
-
 	struct KV *kv = lop.kv;
+
+	ot_add(&lop.operator_table, "$", 0, LOP_OPERATOR_UNARY);
+	ot_add(&lop.operator_table, "@", 0, LOP_OPERATOR_UNARY);
+	ot_add(&lop.operator_table, "#", 0, LOP_OPERATOR_UNARY);
 
 	KV_ADD("root",
 		SN_TLIST(
@@ -1385,8 +1300,6 @@ static struct LOP root_schema_init(void)
 		);
 	);
 
-	kv_check(kv);
-
 	return lop;
 }
 
@@ -1394,17 +1307,10 @@ void LOP_schema_deinit(struct LOP *lop)
 {
 	kv_free(lop->kv, (free_value_t)sn_free);
 
-	for (struct LOP_OperatorTable *op = lop->unary; op->value; op++) {
-		free((char *)op->value);
-	}
-	for (struct LOP_OperatorTable *op = lop->binary; op->value; op++) {
-		free((char *)op->value);
-	}
-	free(lop->unary);
-	free(lop->binary);
+	ot_destroy(&lop->operator_table);
 }
 
-int LOP_schema_parse_source(void *ctx, struct LOP *lop, const char *string, size_t len, const char *key)
+int LOP_schema_parse_source(void *ctx, struct LOP *lop, const char *string, size_t len, const char *top_rule_name)
 {
 	struct KV *kv = lop->kv;
 	struct LOP_ASTNode *ast;
@@ -1415,17 +1321,17 @@ int LOP_schema_parse_source(void *ctx, struct LOP *lop, const char *string, size
 	int kv_key;
 	int rc = 0;
 
-	kv_key = kv_get(kv, key, false);
+	kv_key = kv_get_index(kv, top_rule_name, false);
 	if (kv_key < 0) {
 		rc = LOP_ERROR_SCHEMA_MISSING_TOP;
 		if (lop->error_cb) {
-			lop->error_cb(rc, (union LOP_Error) { .str = key });
+			lop->error_cb(rc, (union LOP_Error) { .str = top_rule_name });
 		}
 		return rc;
 	}
 
 	schema = kv->children[kv_key].value;
-	rc = LOP_getAST(&ast, string, len, lop->unary, lop->binary, lop->error_cb);
+	rc = LOP_getAST(&ast, string, len, &lop->operator_table, lop->error_cb);
 	if (rc < 0) {
 		return rc;
 	}
@@ -1453,25 +1359,37 @@ int LOP_schema_parse_source(void *ctx, struct LOP *lop, const char *string, size
 	return rc;
 }
 
+static int kv_check(void *arg, struct KVEntry *kv)
+{
+	if (kv->value == NULL) {
+		*(void **)arg = kv->key;
+		return 1;
+	}
+	return 0;
+}
+
 int LOP_schema_init(struct LOP *lop, const char *user_schema, size_t len)
 {
-	struct LOP root_schema = root_schema_init();
+	struct LOP root_schema;
 	struct Runtime r = {
 		.lop = lop,
 	};
 	int rc = 0;
 
+	assert(lop->operator_table.size == 0 && lop->operator_table.data == NULL);
+
+	root_schema = root_schema_init();
 	root_schema.error_cb = lop->error_cb;
 
 	lop->kv = kv_alloc();
 
-	op_prepend(&lop->unary, &r.unary_count, NULL);
-	op_prepend(&lop->binary, &r.binary_count, NULL);
-
 	rc = LOP_schema_parse_source(&r, &root_schema, user_schema, len, "root");
 
 	if (!rc) {
-		const char *err_key = kv_check(lop->kv);
+		const char *err_key = NULL;
+
+		kv_iterate(lop->kv, kv_check, &err_key);
+
 		if (err_key) {
 			rc = LOP_ERROR_SCHEMA_MISSING_RULE;
 			if (lop->error_cb) {
