@@ -1,19 +1,14 @@
 #include <assert.h>
 #include <stdlib.h>
-#include <stdio.h>
 #include <string.h>
-#include <sys/types.h>
 
 #include <LOP.h>
 
-extern int charno;
-extern int yylineno;
-extern int yyleng;
-extern char *yytext;
-static int indent;
+#include "lex.yy.c"
 
 static struct LOP_ASTNode *last_list;
 static struct LOP_ASTNode *last_token;
+static int indent;
 static int newline_was;
 static int continue_was;
 
@@ -34,6 +29,8 @@ static struct LOP_ASTNode *create_token(enum LOP_ASTNodeType type)
 		} else {
 			t->symbol.value = strdup(yytext);
 		}
+
+		assert(t->symbol.value);
 	}
 
 	return t;
@@ -94,7 +91,7 @@ static void close_vert_colon(void)
 		 * and not the (list ':;' (unary % (call ':;' b) c)) */
 		operator_close();
 
-		/* :;\n() must not be the call of :; */
+		/* :\n() must not be the call of :; */
 		last_token = NULL;
 	}
 }
@@ -154,6 +151,8 @@ static void l_str_append()
 	assert(last_token->symbol.value);
 
 	strcat((char *)last_token->symbol.value, yytext);
+
+	newline_was = 0;
 }
 
 static void l_str_close()
@@ -162,6 +161,8 @@ static void l_str_close()
 		last_list = last_list->parent;
 		last_token = last_list->list.tail;
 	}
+
+	newline_was = 0;
 }
 
 static struct LOP_Operator *op_find(struct LOP_OperatorTable *table, const char *value, unsigned mask)
@@ -241,7 +242,7 @@ static void l_push_token(enum LOP_ASTNodeType t)
 
 static void l_list_close(enum LOP_ASTNodeType t)
 {
-	while (last_list_is_operator() || last_list->type == LOP_TYPE_LIST_COLON) {
+	while (last_list_is_operator() || (t != LOP_TYPE_LIST_COLON && last_list->type == LOP_TYPE_LIST_COLON)) {
 		last_list = last_list->parent;
 	}
 
@@ -249,17 +250,8 @@ static void l_list_close(enum LOP_ASTNodeType t)
 
 	last_list = last_list->parent;
 	last_token = last_list->list.tail;
-}
 
-static void l_tlist_close(void)
-{
-	close_vert_colon();
-	operator_close();
-
-	assert(last_list->type == LOP_TYPE_LIST_COLON);
-
-	last_list = last_list->parent;
-	last_token = last_list->list.tail;
+	newline_was = 0;
 }
 
 static void l_indent()
@@ -283,15 +275,13 @@ static void l_newline()
 
 static void l_comma()
 {
-	if (last_token == NULL) {
+	if (!last_list_is_operator() && last_token == NULL) {
 		push_token(create_token(LOP_TYPE_NIL));
 	}
 
 	operator_close();
 	last_token = NULL;
 }
-
-#include "lex.yy.c"
 
 int yywrap() {
 	return 1;
@@ -358,7 +348,7 @@ int LOP_getAST(struct LOP_ASTNode **root, const char *string, size_t len, struct
 			l_list_close(LOP_TYPE_LIST_SQUARE);
 			break;
 		case L_TLIST_CLOSE:
-			l_tlist_close();
+			l_list_close(LOP_TYPE_LIST_COLON);
 			break;
 		case L_INDENT:
 			l_indent();
