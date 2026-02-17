@@ -1,9 +1,13 @@
-SRCS := src/TextToAST.c src/ASTSchema.c util/FileMap.c
+SRCS := src/TextToASTv2.c src/AST.c src/ASTSchema.c util/FileMap.c
 OBJS := $(SRCS:.c=.o)
 
-CFLAGS := -Wall -Iinclude/ -fPIC
+CFLAGS := -Wall -O2 -Iinclude/ -fPIC
 
-all: liblop.so liblop.a test/lop-verify
+all: liblop.so liblop.a test/lop-schema test/lop-ast
+
+src/TextToASTv2.o: src/TextToASTv2.c src/lex.yy.c
+src/lex.yy.c: src/lop.l
+	flex -o $@ $^
 
 liblop.so: $(OBJS)
 	$(LINK.c) -shared $^ -o $@
@@ -11,12 +15,17 @@ liblop.so: $(OBJS)
 liblop.a: $(OBJS)
 	ar rcs $@ $^
 
-test/lop-verify: test/lop-verify.o liblop.a
+test/lop-schema: test/lop-schema.o liblop.a
+	$(LINK.c) $^ liblop.a -o $@
+
+test/lop-ast: test/lop-ast.o liblop.a
 	$(LINK.c) $^ liblop.a -o $@
 
 clean:
 	rm -f src/*.o
+	rm -f src/lex.yy.c
 	rm -f util/*.o
 	rm -f test/*.o
 	rm -f liblop.*
-	rm -f test/lop-verify
+	rm -f test/lop-schema
+	rm -f test/lop-ast

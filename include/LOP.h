@@ -10,77 +10,60 @@ struct LOP;
 struct LOP_HandlerList;
 struct LOP_CB;
 
-enum LOP_ErrorType;
-union LOP_Error;
-
 typedef int (*LOP_handler_t)(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg);
-typedef int (*LOP_resolve_t)(struct LOP *lop, const char *key, struct LOP_CB *cb);
+typedef int (*LOP_resolve_t)(struct LOP *lop, const char *handler_name, struct LOP_CB *cb);
 typedef void (*LOP_cb_dtor_t)(struct LOP_CB *cb);
-
-typedef void (*LOP_error_cb_t)(enum LOP_ErrorType type, union LOP_Error error);
-
-enum LOP_ListType {
-	// :;
-	LOP_LIST_TLIST = 1 << 0,
-	// ()
-	LOP_LIST_LIST = 1 << 1,
-	// []
-	LOP_LIST_AREF = 1 << 2,
-	// {}
-	LOP_LIST_STRUCT = 1 << 3,
-	// implicit list for 'a`op`b' and '`op`c'
-	LOP_LIST_OPERATOR = 1 << 4,
-	// '', ""
-	LOP_LIST_STRING = 1 << 5,
-};
-
-enum LOP_ListOp {
-	LOP_LIST_NOP = 0,
-	LOP_LIST_CALL,
-	LOP_LIST_BINARY,
-	LOP_LIST_UNARY,
-};
-
-enum LOP_SymbolType {
-	// starts with letter and until stop
-	LOP_SYMBOL_IDENTIFIER,
-	// starts with number and until stop
-	LOP_SYMBOL_NUMBER,
-	// starts and ends with quotes " or '
-	LOP_SYMBOL_STRING,
-	// non-letters, numbers and punctuations
-	LOP_SYMBOL_OPERATOR,
-};
 
 struct LOP_Location {
 	int lineno;
 	int charno;
+	size_t line_offset;
 };
 
 struct LOP_ASTNode {
 	enum LOP_ASTNodeType {
-		LOP_AST_SYMBOL,
-		LOP_AST_LIST,
+		/* () */
+		LOP_TYPE_LIST_ROUND,
+		/* {} */
+		LOP_TYPE_LIST_CURLY,
+		/* [] */
+		LOP_TYPE_LIST_SQUARE,
+		/* :; */
+		LOP_TYPE_LIST_COLON,
+		/* xxx"", xxx'' */
+		LOP_TYPE_LIST_STRING,
+		/* Convenient indicator */
+		LOP_TYPE_LIST_LAST_CALLABLE,
+		/* Virtual list for operators */
+		LOP_TYPE_LIST_OPERATOR_UNARY,
+		LOP_TYPE_LIST_OPERATOR_BINARY,
+		/* Convenient indicator */
+		LOP_TYPE_LIST_LAST,
+
+		LOP_TYPE_OPERATOR,
+		LOP_TYPE_ID,
+		LOP_TYPE_NUMBER,
+		LOP_TYPE_STRING,
+		LOP_TYPE_NIL,
 	} type;
 
 	struct LOP_ASTNode *parent;
-	struct LOP_ASTNode *prev;
 	struct LOP_ASTNode *next;
 
+	/* Needed for closing colon lists */
+	int indent;
+
 	union {
-		struct LOP_ASTSymbol {
-			enum LOP_SymbolType type;
+		struct {
 			char *value;
 		} symbol;
 
-		struct LOP_ASTList {
-			enum LOP_ListType type;
-			enum LOP_ListOp op;
+		struct {
 			struct LOP_ASTNode *head;
 			struct LOP_ASTNode *tail;
-			int count;
-			int indent;
-			bool multiline;
+			/* a(b) vs (a, b) */
+			int call;
+			/* For operators which are special type of lists */
 			int prio;
 		} list;
 	};
@@ -88,46 +71,22 @@ struct LOP_ASTNode {
 	struct LOP_Location loc;
 };
 
-struct LOP_OperatorTable {
+struct LOP_Operator {
 	const char *value;
 	int prio;
-	enum LOP_OperatorType {
-		LOP_OPERATOR_LEFT,
-		LOP_OPERATOR_RIGHT,
-	} type;
+
+	unsigned type;
+#define LOP_OPERATOR_UNARY (1 << 0)
+/* Left-To-Right: a.b.c => (a.b).c */
+#define LOP_OPERATOR_LTR (1 << 1)
+/* Right-To-Left: a.b.c => a.(b.c) */
+#define LOP_OPERATOR_RTL (1 << 2)
+#define LOP_OPERATOR_BINARY_MASK (LOP_OPERATOR_LTR | LOP_OPERATOR_RTL)
 };
 
-enum LOP_ErrorType {
-	LOP_ERROR_TOKEN_UNKNOWN = INT_MIN,
-	LOP_ERROR_TOKEN_BAD_INDENT,
-	LOP_ERROR_TOKEN_BAD_INDENT_CLOSE,
-	LOP_ERROR_TOKEN_UNBALANCED,
-	LOP_ERROR_TOKEN_SEPARATOR,
-	LOP_ERROR_TOKEN_UNARY_ARGS,
-	LOP_ERROR_TOKEN_UNARY_UNKNOWN,
-	LOP_ERROR_TOKEN_BINARY_ARGS,
-	LOP_ERROR_TOKEN_BINARY_UNKNOWN,
-
-	LOP_ERROR_SCHEMA_SYNTAX,
-	LOP_ERROR_SCHEMA_MISSING_RULE,
-	LOP_ERROR_SCHEMA_MISSING_HANDLER,
-	LOP_ERROR_SCHEMA_MISSING_TOP,
-};
-
-union LOP_Error {
-	struct {
-		struct LOP_ASTNode *node;
-		const char *src;
-	} syntax;
-	const char *str;
-	struct {
-		const char *str;
-		size_t len;
-		struct LOP_Location loc;
-		int expindent;
-		int actindent;
-		const char *value;
-	} token;
+struct LOP_OperatorTable {
+	struct LOP_Operator *data;
+	int size;
 };
 
 struct LOP_CB {
@@ -136,28 +95,45 @@ struct LOP_CB {
 	LOP_cb_dtor_t dtor;
 };
 
+struct LOP_HandlerList {
+	struct LOP_Handler *handler;
+	int count;
+};
+
 struct LOP_Handler {
 	struct SchemaNode *sn;
 	struct LOP_ASTNode *n;
-	struct LOP_HandlerList {
-		struct LOP_Handler *handler;
-		int count;
-	} hl;
+	struct LOP_HandlerList hl;
 };
 
 struct LOP {
 	struct KV *kv;
-	struct LOP_OperatorTable *unary;
-	struct LOP_OperatorTable *binary;
+	struct LOP_OperatorTable operator_table;
 
 	LOP_resolve_t resolve;
-	LOP_error_cb_t error_cb;
+};
+
+enum LOP_ErrorType {
+	LOP_ERROR_LEXER_UNKNOWN = INT_MIN,
+	LOP_ERROR_LEXER_UNBALANCED,
+	LOP_ERROR_LEXER_ROOT_CLOSED,
+	LOP_ERROR_LEXER_ROOT_CLOSED_BY_INDENT,
+	LOP_ERROR_LEXER_SEPARATOR,
+	LOP_ERROR_LEXER_UNARY_ARGS,
+	LOP_ERROR_LEXER_UNARY_UNKNOWN,
+	LOP_ERROR_LEXER_BINARY_ARGS,
+	LOP_ERROR_LEXER_BINARY_UNKNOWN,
+	LOP_ERROR_LEXER_OUT_OF_MEMORY,
+
+	LOP_ERROR_SCHEMA_SYNTAX,
+	LOP_ERROR_SCHEMA_MISSING_RULE,
+	LOP_ERROR_SCHEMA_MISSING_HANDLER,
+	LOP_ERROR_SCHEMA_MISSING_TOP,
 };
 
 /* AST functions */
-int LOP_getAST(struct LOP_ASTNode **root, const char *string, size_t len,
-	struct LOP_OperatorTable *unary, struct LOP_OperatorTable *binary,
-	LOP_error_cb_t error_cb);
+int LOP_getAST(struct LOP_ASTNode **root, const char *filename, const char *string, size_t len,
+	struct LOP_OperatorTable *operator_table);
 void LOP_delAST(struct LOP_ASTNode *root);
 
 void LOP_dump_ast(struct LOP_ASTNode *root, bool pretty);
@@ -170,12 +146,11 @@ struct LOP_ASTNode *LOP_list_tail(struct LOP_ASTNode *n);
 int LOP_handler_eval(struct LOP_HandlerList hl, unsigned child, void *param);
 bool LOP_handler_evalable(struct LOP_HandlerList hl, unsigned child);
 
-int LOP_schema_init(struct LOP *lop, const char *user_schema, size_t len);
-int LOP_schema_parse_source(void *ctx, struct LOP *lop, const char *string, size_t len, const char *key);
+int LOP_schema_init(struct LOP *lop, const char *filename, const char *user_schema, size_t len);
+int LOP_schema_parse_source(void *ctx, struct LOP *lop, const char *filename, const char *string, size_t len, const char *top_rule_name);
 void LOP_schema_deinit(struct LOP *lop);
 
 /* Standard callbacks */
-void LOP_default_error_cb(enum LOP_ErrorType type, union LOP_Error error);
 int LOP_cb_default(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg);
 
 #endif // LOP_H
