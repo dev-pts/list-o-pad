@@ -2,7 +2,7 @@
 
 struct FileMap map_file(const char *filename)
 {
-	struct FileMap ret = {};
+	struct FileMap ret = { .fd = -1 };
 
 	int fd = open(filename, O_RDONLY);
 	if (fd < 0) {
