@@ -605,7 +605,7 @@ int LOP_getAST(struct LOP_ASTNode **root, const char *filename, const char *stri
 	}
 
 	if (rc == 0) {
-		do {
+		while (last_list) {
 			if (last_list_is_operator()) {
 				rc = operator_close_verify();
 				if (rc < 0) {
@@ -617,10 +617,7 @@ int LOP_getAST(struct LOP_ASTNode **root, const char *filename, const char *stri
 				break;
 			}
 			last_list = last_list->parent;
-			if (last_list == NULL) {
-				break;
-			}
-		} while (0);
+		}
 	}
 
 	if (rc < 0) {
