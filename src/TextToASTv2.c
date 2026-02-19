@@ -279,9 +279,11 @@ static int push_token(struct LOP_ASTNode *t)
 
 static int l_str_open()
 {
-	int rc = push_token(create_token(LOP_TYPE_LIST_STRING));
-	if (rc < 0) {
-		return rc;
+	if (last_token) {
+		int rc = push_token(create_token(LOP_TYPE_LIST_STRING));
+		if (rc < 0) {
+			return rc;
+		}
 	}
 	return push_token(create_token(LOP_TYPE_STRING));
 }
@@ -310,7 +312,9 @@ static int l_str_append()
 
 static int l_str_close()
 {
-	last_list = last_list->parent;
+	if (last_list->type == LOP_TYPE_LIST_STRING) {
+		last_list = last_list->parent;
+	}
 	last_token = last_list->list.tail;
 	newline_was = 0;
 	return 0;
@@ -494,6 +498,29 @@ int yywrap() {
 	return 1;
 }
 
+static int finish(void)
+{
+	if (last_token && last_token->type == LOP_TYPE_STRING) {
+		last_loc = last_token->loc;
+		return LOP_ERROR_LEXER_UNBALANCED;
+	}
+
+	while (last_list) {
+		if (last_list_is_operator()) {
+			int rc = operator_close_verify();
+			if (rc < 0) {
+				return rc;
+			}
+		} else if (last_list->type != LOP_TYPE_LIST_COLON) {
+			last_loc = last_list->loc;
+			return LOP_ERROR_LEXER_UNBALANCED;
+		}
+		last_list = last_list->parent;
+	}
+
+	return 0;
+}
+
 int LOP_getAST(struct LOP_ASTNode **root, const char *filename, const char *string, size_t len, struct LOP_OperatorTable *operator_table)
 {
 	enum Token t;
@@ -605,19 +632,7 @@ int LOP_getAST(struct LOP_ASTNode **root, const char *filename, const char *stri
 	}
 
 	if (rc == 0) {
-		while (last_list) {
-			if (last_list_is_operator()) {
-				rc = operator_close_verify();
-				if (rc < 0) {
-					break;
-				}
-			} else if (last_list->type != LOP_TYPE_LIST_COLON) {
-				last_loc = last_list->loc;
-				rc = LOP_ERROR_LEXER_UNBALANCED;
-				break;
-			}
-			last_list = last_list->parent;
-		}
+		rc = finish();
 	}
 
 	if (rc < 0) {

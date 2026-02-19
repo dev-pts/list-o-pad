@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <LOP.h>
 #include <string.h>
 #include "FileMap.h"
@@ -33,19 +34,36 @@ int main(int argc, char *argv[])
 	struct LOP lop = {
 		.resolve = resolve,
 	};
-	struct FileMap schema = map_file(argv[1]);
-	struct FileMap source = map_file(argv[2]);
 	int rc;
 
-	rc = LOP_schema_init(&lop, argv[1], schema.data, schema.len);
-	if (rc == 0) {
-		LOP_schema_parse_source(NULL, &lop, argv[2], source.data, source.len, argv[3]);
-	} else {
-		fprintf(stderr, "Schema parsing error\n");
+	if (argc < 4) {
+		fprintf(stderr, "Usage: %s <schema-file> <top-rule-name> <source-file> ...\n", argv[0]);
+		return -1;
 	}
-	LOP_schema_deinit(&lop);
 
+	struct FileMap schema = map_file(argv[1]);
+	assert(schema.fd >= 0);
+	rc = LOP_schema_init(&lop, argv[1], schema.data, schema.len);
 	unmap_file(schema);
-	unmap_file(source);
+
+	if (rc < 0) {
+		fprintf(stderr, "User schema parsing error\n");
+		goto out;
+	}
+
+	for (int i = 3; i < argc; i++) {
+		struct FileMap source = map_file(argv[i]);
+		assert(source.fd >= 0);
+		rc = LOP_schema_parse_source(NULL, &lop, argv[i], source.data, source.len, argv[2]);
+		unmap_file(source);
+
+		if (rc < 0) {
+			fprintf(stderr, "Parsing error\n");
+			break;
+		}
+	}
+
+out:
+	LOP_schema_deinit(&lop);
 	return 0;
 }
