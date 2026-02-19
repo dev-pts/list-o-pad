@@ -163,8 +163,12 @@ struct SchemaNode {
 	};
 };
 
-static void dump_sn(struct SchemaNode *sn)
+static void dump_sn(struct SchemaNode *sn, int level, struct KV *kv)
 {
+	for (int i = 0; i < level; i++) {
+		printf("\t");
+	}
+
 #define CASE_SN_TYPE(type)	case type: printf(#type); break
 	switch (sn->sn_type) {
 		CASE_SN_TYPE(SN_TYPE_AST);
@@ -174,13 +178,9 @@ static void dump_sn(struct SchemaNode *sn)
 		CASE_SN_TYPE(SN_TYPE_REF);
 	}
 #undef CASE_SN_TYPE
-	if (sn->optional) {
-		printf(", optional");
+	if (sn->sn_type == SN_TYPE_REF) {
+		printf(", $%s", kv->children[sn->ref].key);
 	}
-	if (sn->last) {
-		printf(", last");
-	}
-	printf(", child_count = %i", sn->child_count);
 	if (sn->sn_type == SN_TYPE_AST) {
 #define CASE_TYPE(type, val) case type: printf(", " val); break
 		switch (sn->type) {
@@ -200,11 +200,26 @@ static void dump_sn(struct SchemaNode *sn)
 			assert(0);
 		}
 #undef CASE_TYPE
-		if (sn->type > LOP_TYPE_LIST_LAST) {
+		if (sn->type > LOP_TYPE_LIST_LAST && sn->symbol.value) {
 			printf(", \"%s\"", sn->symbol.value);
 		}
 	}
+	if (sn->optional) {
+		printf(", #optional");
+	}
+	if (sn->last) {
+		printf(", #last");
+	}
 	printf("\n");
+}
+
+static void dump_sn_recurse(struct SchemaNode *sn, int level, struct KV *kv)
+{
+	dump_sn(sn, level, kv);
+
+	for (int i = 0; i < sn->child_count; i++) {
+		dump_sn_recurse(sn->child[i], level + 1, kv);
+	}
 }
 
 static int s_report(enum LOP_ErrorType type, const char *str)
@@ -258,9 +273,6 @@ static void sn_free(struct SchemaNode *sn)
 	free(sn->child);
 	if (sn->sn_type == SN_TYPE_AST && sn->type > LOP_TYPE_LIST_LAST) {
 		free(sn->symbol.value);
-	}
-	if (sn->cb.dtor) {
-		sn->cb.dtor(&sn->cb);
 	}
 	free(sn);
 }
@@ -1328,6 +1340,15 @@ void LOP_schema_deinit(struct LOP *lop)
 	ot_destroy(&lop->operator_table);
 }
 
+static int kv_dump_sn(void *arg, struct KVEntry *kv)
+{
+	struct SchemaNode *schema = kv->value;
+
+	printf("%s:\n", kv->key);
+	dump_sn_recurse(schema, 1, arg);
+	return 0;
+}
+
 int LOP_schema_parse_source(void *ctx, struct LOP *lop, const char *filename, const char *string, size_t len, const char *top_rule_name)
 {
 	struct KV *kv = lop->kv;
@@ -1339,29 +1360,39 @@ int LOP_schema_parse_source(void *ctx, struct LOP *lop, const char *filename, co
 	int kv_key;
 	int rc = 0;
 
+	/* If you want to see how it's look */
+	if (0) {
+		kv_iterate(kv, kv_dump_sn, kv);
+	}
+
+	/* Get the top rule from which everything starts */
 	kv_key = kv_get_index(kv, top_rule_name, false);
 	if (kv_key < 0) {
 		return s_report(LOP_ERROR_SCHEMA_MISSING_TOP, top_rule_name);
 	}
-
 	schema = kv->children[kv_key].value;
+
+	/* Translate the source text to the AST */
 	rc = LOP_getAST(&ast, filename, string, len, &lop->operator_table);
 	if (rc < 0) {
 		return rc;
 	}
 	n = ast;
 
+	/* Apply schema to the AST and get a tree of handlers to call */
 	if (check_entry(&hl, &n, schema, &err, kv)) {
 		assert(hl.count == 1);
+		/* Parsing succeeded, call the handlers to complete the job */
 		rc = LOP_handler_eval(hl, 0, ctx);
 	} else {
+		LOP_dump_ast(err);
 		return s_report(LOP_ERROR_SCHEMA_SYNTAX, NULL);
 	}
 
 	handler_free(&hl);
 
+	/* AST has allocs, we must free them */
 	LOP_delAST(ast);
-
 	return rc;
 }
 
@@ -1382,25 +1413,30 @@ int LOP_schema_init(struct LOP *lop, const char *filename, const char *user_sche
 	};
 	int rc = 0;
 
-	assert(lop->operator_table.size == 0 && lop->operator_table.data == NULL);
+	/* We will fill the structure */
+	assert(lop->operator_table.size == 0);
+	assert(lop->operator_table.data == NULL);
+	assert(lop->kv == NULL);
 
+	/* Prepare root schema to parse user schema */
 	root_schema = root_schema_init();
 
+	/* Alocate KV storage where rules from user schema will be stored */
 	lop->kv = kv_alloc();
 
+	/* Parse user schema and fill lop with rules and operators table */
 	rc = LOP_schema_parse_source(&r, &root_schema, filename, user_schema, len, "root");
-
 	if (rc == 0) {
 		const char *err_key = NULL;
 
+		/* Ensure that all references to the rules refer to the existed rules in the user schema */
 		kv_iterate(lop->kv, kv_check, &err_key);
-
 		if (err_key) {
 			rc = s_report(LOP_ERROR_SCHEMA_MISSING_RULE, err_key);
 		}
 	}
 
+	/* Root schema is on the stack, we must free its internal allocs */
 	LOP_schema_deinit(&root_schema);
-
 	return rc;
 }

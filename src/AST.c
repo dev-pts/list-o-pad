@@ -111,7 +111,7 @@ static void dump_item(struct LOP_ASTNode *t, int level)
 		printf("(number %s)", t->symbol.value);
 		break;
 	case LOP_TYPE_STRING:
-		printf("(string '%s')", t->symbol.value);
+		printf("(string:%i,%i '%s')", t->loc.lineno, t->loc.charno, t->symbol.value);
 		break;
 	case LOP_TYPE_NIL:
 		printf("nil");
@@ -121,7 +121,7 @@ static void dump_item(struct LOP_ASTNode *t, int level)
 	}
 }
 
-void LOP_dump_ast(struct LOP_ASTNode *root, bool pretty)
+void LOP_dump_ast(struct LOP_ASTNode *root)
 {
 	dump_item(root, 1);
 	printf("\n");

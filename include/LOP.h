@@ -12,7 +12,6 @@ struct LOP_CB;
 
 typedef int (*LOP_handler_t)(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg);
 typedef int (*LOP_resolve_t)(struct LOP *lop, const char *handler_name, struct LOP_CB *cb);
-typedef void (*LOP_cb_dtor_t)(struct LOP_CB *cb);
 
 struct LOP_Location {
 	int lineno;
@@ -92,7 +91,6 @@ struct LOP_OperatorTable {
 struct LOP_CB {
 	LOP_handler_t func;
 	void *arg;
-	LOP_cb_dtor_t dtor;
 };
 
 struct LOP_HandlerList {
@@ -136,7 +134,7 @@ int LOP_getAST(struct LOP_ASTNode **root, const char *filename, const char *stri
 	struct LOP_OperatorTable *operator_table);
 void LOP_delAST(struct LOP_ASTNode *root);
 
-void LOP_dump_ast(struct LOP_ASTNode *root, bool pretty);
+void LOP_dump_ast(struct LOP_ASTNode *root);
 
 const char *LOP_symbol_value(struct LOP_ASTNode *n);
 struct LOP_ASTNode *LOP_list_head(struct LOP_ASTNode *n);

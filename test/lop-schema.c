@@ -35,9 +35,13 @@ int main(int argc, char *argv[])
 	};
 	struct FileMap schema = map_file(argv[1]);
 	struct FileMap source = map_file(argv[2]);
+	int rc;
 
-	if (!LOP_schema_init(&lop, argv[1], schema.data, schema.len)) {
+	rc = LOP_schema_init(&lop, argv[1], schema.data, schema.len);
+	if (rc == 0) {
 		LOP_schema_parse_source(NULL, &lop, argv[2], source.data, source.len, argv[3]);
+	} else {
+		fprintf(stderr, "Schema parsing error\n");
 	}
 	LOP_schema_deinit(&lop);
 

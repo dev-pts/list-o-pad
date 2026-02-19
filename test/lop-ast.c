@@ -9,6 +9,7 @@ int main(int argc, char *argv[])
 		{ ".", 0, LOP_OPERATOR_UNARY },
 		{ "$", 0, LOP_OPERATOR_UNARY },
 		{ "@", 0, LOP_OPERATOR_UNARY },
+		{ "#", 0, LOP_OPERATOR_UNARY },
 
 		{ ".", 0, LOP_OPERATOR_LTR },
 		{ "->", 0, LOP_OPERATOR_LTR },
@@ -81,7 +82,7 @@ int main(int argc, char *argv[])
 	source = map_file(argv[1]);
 
 	rc = LOP_getAST(&ast, argv[1], source.data, source.len, &ot);
-	LOP_dump_ast(ast, true);
+	LOP_dump_ast(ast);
 	LOP_delAST(ast);
 
 	unmap_file(source);
