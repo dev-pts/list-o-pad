@@ -5,8 +5,8 @@ CFLAGS := -Wall -O2 -Iinclude/ -fPIC
 
 all: liblop.so liblop.a test/lop-schema test/lop-ast
 
-src/ASTSchema.o: src/ASTSchema.c src/RootSchema.c
-src/TextToASTv2.o: src/TextToASTv2.c src/lex.yy.c
+src/ASTSchema.o: src/ASTSchema.c src/RootSchema.c src/ErrorReport.c
+src/TextToASTv2.o: src/TextToASTv2.c src/lex.yy.c src/ErrorReport.c
 src/lex.yy.c: src/lop.l
 	flex -o $@ $^
 

@@ -111,7 +111,7 @@ static void dump_item(struct LOP_ASTNode *t, int level)
 		printf("(number %s)", t->symbol.value);
 		break;
 	case LOP_TYPE_STRING:
-		printf("(string:%i,%i '%s')", t->loc.lineno, t->loc.charno, t->symbol.value);
+		printf("(string '%s')", t->symbol.value);
 		break;
 	case LOP_TYPE_NIL:
 		printf("nil");

@@ -16,60 +16,48 @@ static size_t l_line_offset;
 static struct LOP_Location last_loc;
 static size_t l_str_offset;
 
-static void l_report(enum LOP_ErrorType type, const char *filename, const char *string)
+#include "ErrorReport.c"
+
+static void l_report(enum LOP_ErrorType type, const char *filename, const char *string, size_t len, struct LOP_Location loc)
 {
+	const char *err_string = NULL;
+
 	switch (type) {
 	case LOP_ERROR_LEXER_OUT_OF_MEMORY:
-		fprintf(stderr, "Out of memory");
+		err_string = "Out of memory";
 		break;
 	case LOP_ERROR_LEXER_UNKNOWN:
-		fprintf(stderr, "Unknown symbol");
+		err_string = "Unknown symbol";
 		break;
 	case LOP_ERROR_LEXER_UNBALANCED:
-		fprintf(stderr, "Unbalanced list");
+		err_string = "Unbalanced list";
 		break;
 	case LOP_ERROR_LEXER_ROOT_CLOSED:
-		fprintf(stderr, "Root list is closed by ;");
+		err_string = "Root list is closed by ;";
 		break;
 	case LOP_ERROR_LEXER_ROOT_CLOSED_BY_INDENT:
-		fprintf(stderr, "Root list is closed by indent");
+		err_string = "Root list is closed by indent";
 		break;
 	case LOP_ERROR_LEXER_SEPARATOR:
-		fprintf(stderr, "Separator expected");
+		err_string = "Separator expected";
 		break;
 	case LOP_ERROR_LEXER_UNARY_ARGS:
-		fprintf(stderr, "Unary operator expects exactly 1 argument");
+		err_string = "Unary operator expects exactly 1 argument";
 		break;
 	case LOP_ERROR_LEXER_UNARY_UNKNOWN:
-		fprintf(stderr, "Unknown unary operator");
+		err_string = "Unknown unary operator";
 		break;
 	case LOP_ERROR_LEXER_BINARY_ARGS:
-		fprintf(stderr, "Binary operator expects exactly 2 arguments");
+		err_string = "Binary operator expects exactly 2 arguments";
 		break;
 	case LOP_ERROR_LEXER_BINARY_UNKNOWN:
-		fprintf(stderr, "Unknown binary operator");
+		err_string = "Unknown binary operator";
 		break;
 	default:
 		assert(1);
 	}
 
-	fprintf(stderr, " in file '%s' at %i:%i\n", filename, last_loc.lineno, last_loc.charno + 1);
-	for (const char *p = &string[last_loc.line_offset]; *p && *p != '\n'; p++) {
-		fprintf(stderr, "%c", *p);
-	}
-	fprintf(stderr, "\n");
-	{
-		int i = 0;
-
-		for (const char *p = &string[last_loc.line_offset]; *p && *p != '\n' && i < last_loc.charno; p++, i++) {
-			if (isspace(*p)) {
-				fprintf(stderr, "%c", *p);
-			} else {
-				fprintf(stderr, " ");
-			}
-		}
-	}
-	fprintf(stderr, "^\n");
+	report_error(filename, string, len, loc, err_string);
 }
 
 static struct LOP_Location get_loc(void)
@@ -636,7 +624,7 @@ int LOP_getAST(struct LOP_ASTNode **root, const char *filename, const char *stri
 	}
 
 	if (rc < 0) {
-		l_report(rc, filename, string);
+		l_report(rc, filename, string, len, last_loc);
 	}
 
 	return rc;

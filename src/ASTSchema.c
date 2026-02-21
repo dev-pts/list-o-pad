@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -101,9 +102,6 @@ static void dump_sn_recurse(struct SchemaNode *sn, int level, struct KV *kv)
 static int s_report(enum LOP_ErrorType type, const char *str)
 {
 	switch (type) {
-	case LOP_ERROR_SCHEMA_SYNTAX:
-		fprintf(stderr, "Syntax error\n");
-		break;
 	case LOP_ERROR_SCHEMA_MISSING_RULE:
 		fprintf(stderr, "Rule '%s' not found\n", str);
 		break;
@@ -343,6 +341,8 @@ static int kv_dump_sn(void *arg, struct KVEntry *kv)
 	return 0;
 }
 
+#include "ErrorReport.c"
+
 int LOP_schema_parse_source(void *ctx, struct LOP *lop, const char *filename, const char *string, size_t len, const char *top_rule_name)
 {
 	struct KV *kv = lop->kv;
@@ -372,6 +372,7 @@ int LOP_schema_parse_source(void *ctx, struct LOP *lop, const char *filename, co
 		return rc;
 	}
 	n = ast;
+	err = ast;
 
 	/* Apply schema to the AST and get a tree of handlers to call */
 	if (check_entry(&hl, &n, schema, &err, kv)) {
@@ -379,8 +380,8 @@ int LOP_schema_parse_source(void *ctx, struct LOP *lop, const char *filename, co
 		/* Parsing succeeded, call the handlers to complete the job */
 		rc = LOP_handler_eval(hl, 0, ctx);
 	} else {
-		LOP_dump_ast(err);
-		return s_report(LOP_ERROR_SCHEMA_SYNTAX, NULL);
+		report_error(filename, string, len, err->loc, "Syntax error");
+		return LOP_ERROR_SCHEMA_SYNTAX;
 	}
 
 	handler_free(&hl);
