@@ -1,29 +1,49 @@
 import sys
-from bdflib import reader
 
-def format_code(code):
-    return ' '.join('0x{:02X},'.format(a) for a in code)
+table = {}
 
-with open(sys.argv[1], "rb") as font_file:
-    font = reader.read_bdf(font_file)
+with open(sys.argv[1], "rb") as f:
+    while True:
+        l = f.readline()
+        if not l:
+            break
+        l = l.strip().decode()
 
-print('''#define ICON_W 32
-#define ICON_H 32
+        if l.startswith('FONTBOUNDINGBOX'):
+            _, w, h, x, y = l.strip().split(' ')
+            print(f'''static struct BitmapFont icon = {{
+\t.size = {{ .w = {w}, .h = {h} }},
+\t.bitmap = (struct BitmapData[]) {{''')
+            continue
 
-static uint8_t icon[] = {''')
+        if l.startswith('ENCODING'):
+            _, code = l.strip().split(' ')
+            code = int(code)
+            continue
 
-for i in range(256):
-    g = font.get(i)
-    if g is None:
-        bitmap = [0] * 32 * 4
-    else:
-        bitmap = []
-        for i in g.data:
-            for j in range(int((32 + 7) / 8)):
-                bitmap.append(i & 0xff)
-                i >>= 8
-        for i in range(len(bitmap), 32 * 4):
-            bitmap.append(0)
-    print('\t' + format_code(bitmap[::-1]))
+        if l.startswith('BBX'):
+            _, w, h, x, y = l.strip().split(' ')
+            table[code] = {}
+            table[code]['bb'] = [ w, h, x, y ]
+            table[code]['bitmap'] = []
+            continue
 
+        if l.startswith('BITMAP'):
+            while True:
+                l = f.readline()
+                if not l:
+                    break
+                l = l.strip().decode()
+                if l.startswith('ENDCHAR'):
+                    break
+                table[code]['bitmap'].append(', '.join('0x' + l[i:i + 2] for i in range(0, len(l), 2)))
+            continue
+
+for i in table:
+    t = table[i]
+    bb = t['bb']
+    bitmap = t['bitmap']
+    print(f'\t\t{{ .bb = {{ .w = {bb[0]}, .h = {bb[1]} }}, .data = (uint8_t[]) {{ {", ".join(bitmap)} }} }},')
+
+print('\t}')
 print('};')

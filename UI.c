@@ -68,6 +68,28 @@ static struct Rect rect_move(struct Rect r, struct Pair p)
 	return rect;
 }
 
+static struct Rect rect_intersect(struct Rect s, struct Rect r)
+{
+	struct Rect rect = {
+		.x1 = MAX(s.x1, r.x1),
+		.y1 = MAX(s.y1, r.y1),
+		.x2 = MIN(s.x2, r.x2),
+		.y2 = MIN(s.y2, r.y2),
+	};
+	return rect;
+}
+
+static struct Rect rect_mi(struct Rect s, struct Rect pos, struct Rect d)
+{
+	struct Rect rect = {
+		.x1 = MAX(s.x1 + pos.x1, d.x1),
+		.y1 = MAX(s.y1 + pos.y1, d.y1),
+		.x2 = MIN(s.x2 + pos.x1, d.x2),
+		.y2 = MIN(s.y2 + pos.y1, d.y2),
+	};
+	return rect;
+}
+
 static int rect_width(struct Rect r)
 {
 	return r.x2 - r.x1 + 1;
@@ -98,16 +120,6 @@ static void rect_dump(struct Rect r)
 	printf("%i, %i, %i, %i\n", r.x1, r.y1, r.x2, r.y2);
 }
 
-static struct Rect rect_intersect(struct Rect s, struct Rect r)
-{
-	r.x1 = MAX(s.x1, r.x1);
-	r.y1 = MAX(s.y1, r.y1);
-	r.x2 = MIN(s.x2, r.x2);
-	r.y2 = MIN(s.y2, r.y2);
-
-	return r;
-}
-
 static void draw_rect(struct Rect r, uint32_t color)
 {
 	if (!rect_valid(r)) {
@@ -120,6 +132,87 @@ static void draw_rect(struct Rect r, uint32_t color)
 		}
 	}
 }
+
+struct BitmapData {
+	struct Pair bb;
+	uint8_t *data;
+};
+
+struct BitmapFont {
+	struct Pair size;
+	struct BitmapData *bitmap;
+};
+
+struct Base {
+	/* Parent may ask the element about its sizes */
+	int (*get_width)(struct Base *obj);
+	int (*get_height)(struct Base *obj);
+
+	/* size - your box, layout there as you want */
+	void (*layout)(struct Base *obj, struct Pair size);
+	/* pvp is just a element's vp in the screen coordinates,
+	 * svp - scissored pvp */
+	void (*render)(struct Base *obj, struct Rect pvp, struct Rect svp);
+};
+
+struct Bitmap {
+	struct BitmapFont *bitmap;
+	int index;
+	uint32_t color;
+};
+
+struct Text {
+	uint8_t *font;
+	const char *text;
+	uint32_t color;
+};
+
+struct ChildBox {
+	/* This is a place where a parent puts the calculated area for this element */
+	struct Rect vp;
+
+	union {
+		struct Base *base;
+		struct Bitmap bitmap;
+		struct Text text;
+	};
+};
+
+enum Align {
+	ALIGN_BEGIN,
+	ALIGN_MIDDLE,
+	ALIGN_END
+};
+
+struct BoxContent {
+	enum Align h_align;
+	enum Align v_align;
+
+	union {
+		struct ChildBox child;
+		struct {
+			int children;
+			struct ChildBox *childs;
+		};
+	};
+};
+
+#define INHERIT_PARENT -1
+#define INHERIT_CHILD -2
+
+struct Box {
+	struct Base base;
+
+	int width;
+	int height;
+
+	/* Subtract this from resulted width and height */
+	int padding;
+	/* Draw rect with this color in the resulted area *after* padding */
+	uint32_t color;
+
+	struct BoxContent *content;
+};
 
 /*
  * Bitmap - bitmask two-dimensial array, each horizontal line is aligned to 8 bits
@@ -142,6 +235,32 @@ static void draw_bitmap(struct Rect r, struct Rect s, uint32_t color, const uint
 
 			if (bitmap[idx / 8] & ((uint8_t)0x80 >> (idx % 8))) {
 				struct Pair p = pair_new(r.x1 + j, r.y1 + i);
+
+				fb[p.y * H_RES + p.x] = color;
+			}
+		}
+	}
+}
+
+static void draw_bitmap2(struct Pair pvp, struct Rect svp, struct BitmapFont *font, int index, uint32_t color)
+{
+	struct BitmapData *bd = &font->bitmap[index];
+	struct Rect offset = rect_intersect(rect_move(rect_new(0, 0, bd->bb.w - 1, bd->bb.h - 1), pvp), svp);
+
+	if (!rect_valid(offset)) {
+		return;
+	}
+
+	offset = rect_move(offset, pair_new(-pvp.x, -pvp.y));
+
+	int wi = (bd->bb.w + 7) / 8;
+
+	for (int i = offset.y1; i <= offset.y2; i++) {
+		for (int j = offset.x1; j <= offset.x2; j++) {
+			int idx = i * wi * 8 + j;
+
+			if (bd->data[idx / 8] & ((uint8_t)0x80 >> (idx % 8))) {
+				struct Pair p = pair_new(pvp.x + j, pvp.y + i);
 
 				fb[p.y * H_RES + p.x] = color;
 			}
@@ -191,393 +310,82 @@ static void draw_text(struct Rect r, struct Rect s, uint32_t color, const char *
 
 #include "icon.h"
 
-static void draw_icon(struct Rect r, struct Rect s, uint32_t color, int idx)
+static void child_box_render(struct ChildBox *c, struct Rect pvp, struct Rect svp)
 {
-	draw_bitmap(rect_move(rect_new(0, 0, ICON_W - 1, ICON_H - 1), pair_new(r.x1, r.y1)), s, color, &icon[idx * ICON_W * ICON_H / 8]);
+	struct Rect vp = rect_move(c->vp, pair_new(pvp.x1, pvp.y1));
+
+	if (!rect_valid(vp)) {
+		return;
+	}
+
+	c->base->render(c->base, vp, rect_intersect(vp, svp));
 }
 
-enum {
-	COLOR_0 = 0xd2d4ca,
-	COLOR_1 = 0xe1e3d9,
-	COLOR_2 = 0xedefe2,
-	COLOR_3 = 0xf7f9ec,
-	COLOR_4 = 0xfdfff5,
-};
-
-struct Base {
-	struct Rect vp;
-	int (*get_width)(struct Base *obj);
-	int (*get_height)(struct Base *obj);
-
-	void (*layout)(struct Base *obj);
-	void (*render)(struct Base *obj, struct Rect w, struct Rect s);
-};
-
-static struct {
-	struct {
-		uint32_t color;
-		uint32_t text_color;
-	} button;
-	struct {
-		uint32_t color;
-		uint32_t title_color;
-	} window;
-} style = {
-	.button = {
-		.color = COLOR_2,
-		.text_color = 0,
-	},
-	.window = {
-		.color = COLOR_1,
-		.title_color = COLOR_0,
-	},
-};
-
-#if 0
-Passive:
-	get_size()
-
-TextFlow:
-	\\ Known-sized children are layouted left-to-right top-to-bottom.
-	set_size()
-	get_len()
-	set_overflow(hidden/scroll)
-	get_max_child_height()
-	children: [Passive]
-
-List:
-	\\ Children are layouted to one direction only.
-	set_size()
-	set_direction(vertical/horizontal)
-	set_layout(packed/even)
-	set_justify(begin/end/middle)
-	get_max_child_size()
-	children
-
-Bitmap:
-	get_size()
-	set_bitmap()
-
-Text:
-	get_size()
-	set_text()
-	get_len()
-
-Box:
-	get_size()
-	set_child(Bitmap/Text/NULL)
-	offset
-	margin
-	color
-
-\\ This is your viewport.
-\\ Do whatever you want.
-obj->layout(w, h)
-
-Parent calculates and passes the viewport to the children.
-
-App:
-	Table:
-		rows: 2
-			0:
-				height: 20
-		cols: 1
-		cell:
-			[0, 0]: TopPanel
-			[0, 1]: Canvas
-
-TopPanel:
-	Table:
-		rows: 1
-		cols: 3
-		cell:
-			[0, 0]: List:
-				direction: horizontal
-				layout: packed
-				justify: begin
-				children:
-					Bitmap
-					Bitmap
-					Bitmap
-					Bitmap
-			[1, 0]: List:
-				direction: horizontal
-				layout: packed
-				justify: middle
-				children:
-					Bitmap
-					Text
-					Bitmap
-			[2, 0]: List:
-				direction: horizontal
-				layout: packed
-				justify: end
-				children:
-					Bitmap
-					Bitmap
-					Bitmap
-					Bitmap
-					Bitmap
-
-RightPanel:
-	Table:
-		rows:
-			row:
-				height: 20
-			row:
-		cols:
-			col:
-		cell:
-			[0, 0]:
-				List:
-					direction: horizontal
-					layout: packed
-					justify: begin
-					children:
-						Bitmap
-						Bitmap
-			[0, 1]:
-				TextFlow
-
-List will set it's size to the available viewport.
-The list will find the apropriate viewport for all children and pass them to it.
-
-#endif
-
-#define INHERIT_PARENT -1
-#define INHERIT_CHILD -2
-
-struct Table {
-	struct Base base;
-
-	int rows;
-	int cols;
-
-	int *row;
-	int *col;
-	struct Base **child;
-};
-
-static int table_calc_even(int *dim, int cnt, int vp)
+static void dummy_layout(struct Base *base, struct Pair size)
 {
-	int wo_dim = 0;
-	int total_dim = vp;
-
-	for (int i = 0; i < cnt; i++) {
-		if (dim[i] < 0) {
-			wo_dim++;
-		} else {
-			total_dim -= dim[i];
-		}
-	}
-
-	if (wo_dim) {
-		return total_dim / wo_dim;
-	}
-
-	return -1;
 }
-
-static void table_layout(struct Base *base)
-{
-	struct Table *obj = (struct Table *)base;
-	struct Rect vp = obj->base.vp;
-	int even_width = table_calc_even(obj->col, obj->cols, rect_width(vp));
-	int even_height = table_calc_even(obj->row, obj->rows, rect_height(vp));
-	int y = vp.y1;
-
-	for (int i = 0; i < obj->rows; i++) {
-		int dim_r = obj->row[i];
-		int x = vp.x1;
-		int h;
-
-		if (dim_r < 0) {
-			h = even_height;
-		} else {
-			h = dim_r;
-		}
-
-		for (int j = 0; j < obj->cols; j++) {
-			struct Base *c = obj->child[i * obj->cols + j];
-			int dim_c = obj->col[j];
-			int w;
-
-			if (dim_c < 0) {
-				w = even_width;
-			} else {
-				w = dim_c;
-			}
-
-			c->vp = rect_new(x, y, x + w - 1, y + h - 1);
-
-			x += w;
-		}
-
-		y += h;
-	}
-
-	for (int i = 0; i < obj->rows; i++) {
-		for (int j = 0; j < obj->cols; j++) {
-			struct Base *c = obj->child[i * obj->cols + j];
-
-			c->layout(c);
-		}
-	}
-}
-
-static void table_render(struct Base *base, struct Rect w, struct Rect s)
-{
-	struct Table *obj = (struct Table *)base;
-
-	for (int i = 0; i < obj->rows; i++) {
-		for (int j = 0; j < obj->cols; j++) {
-			struct Base *c = obj->child[i * obj->cols + j];
-
-			c->render(c, rect_intersect(w, c->vp), rect_intersect(s, c->vp));
-		}
-	}
-}
-
-struct List {
-	struct Base base;
-
-	int horizontal;
-	int justify;
-
-	int children;
-	struct Base **child;
-};
-
-static void list_layout(struct Base *base)
-{
-	struct List *obj = (struct List *)base;
-	struct Rect vp = obj->base.vp;
-	int x = vp.x1;
-	int y = vp.y1;
-
-	for (int i = 0; i < obj->children; i++) {
-		struct Base *c = obj->child[i];
-		int x2, y2;
-		int x1 = x;
-		int y1 = y;
-
-		if (obj->horizontal) {
-			int width = c->get_width(c);
-
-			x2 = x1 + width;
-			y2 = vp.y2;
-
-			x += width;
-		} else {
-			int height = c->get_height(c);
-
-			x2 = vp.x2;
-			y2 = y1 + height;
-
-			y += height;
-		}
-
-		c->vp = rect_new(x1, y1, x2, y2);
-	}
-
-	if (obj->justify > 0) {
-		if (obj->horizontal) {
-			int offset = rect_width(vp) - (x - vp.x1);
-
-			if (offset > 0) {
-				if (obj->justify == 1) {
-					offset /= 2;
-				}
-
-				for (int i = 0; i < obj->children; i++) {
-					struct Base *c = obj->child[i];
-
-					c->vp = rect_move(c->vp, pair_new(offset, 0));
-				}
-			}
-		} else {
-			int offset = rect_height(vp) - (y - vp.y1);
-
-			if (offset > 0) {
-				if (obj->justify == 1) {
-					offset /= 2;
-				}
-
-				for (int i = 0; i < obj->children; i++) {
-					struct Base *c = obj->child[i];
-
-					c->vp = rect_move(c->vp, pair_new(0, offset));
-				}
-			}
-		}
-	}
-
-	for (int i = 0; i < obj->children; i++) {
-		struct Base *c = obj->child[i];
-
-		c->layout(c);
-	}
-}
-
-static void list_render(struct Base *base, struct Rect w, struct Rect s)
-{
-	struct List *obj = (struct List *)base;
-
-	for (int i = 0; i < obj->children; i++) {
-		struct Base *c = obj->child[i];
-
-		c->render(c, rect_intersect(w, c->vp), rect_intersect(s, c->vp));
-	}
-}
-
-struct Bitmap {
-	struct Base base;
-
-	uint8_t *bitmap;
-	int width;
-	int height;
-	uint32_t color;
-};
 
 static int bitmap_get_width(struct Base *base)
 {
-	struct Bitmap *obj = (struct Bitmap *)base;
-	return obj->width;
+	struct Box *box = (struct Box *)base;
+	struct Bitmap *obj = &box->content->child.bitmap;
+
+	return obj->bitmap->size.w + box->padding * 2;
 }
 
 static int bitmap_get_height(struct Base *base)
 {
-	struct Bitmap *obj = (struct Bitmap *)base;
-	return obj->height;
+	struct Box *box = (struct Box *)base;
+	struct Bitmap *obj = &box->content->child.bitmap;
+
+	return obj->bitmap->size.h + box->padding * 2;
 }
 
-static void dummy_layout(struct Base *base)
+static void bitmap_layout(struct Base *base, struct Pair size)
 {
+	struct Box *obj = (struct Box *)base;
+	struct Bitmap *b = &obj->content->child.bitmap;
+	struct Rect vp = rect_new(obj->padding, obj->padding, size.w - 1 - obj->padding, size.h - 1 - obj->padding);
+	struct Rect cp = rect_new(0, 0, b->bitmap->bitmap[b->index].bb.w - 1, b->bitmap->bitmap[b->index].bb.h - 1);
+
+	cp = rect_move(cp, pair_new(obj->padding, obj->padding));
+
+	if (obj->content->h_align) {
+		int offset = rect_width(vp) - rect_width(cp);
+
+		if (obj->content->h_align == ALIGN_MIDDLE) {
+			offset /= 2;
+		}
+
+		cp = rect_move(cp, pair_new(offset, 0));
+	}
+
+	if (obj->content->v_align) {
+		int offset = rect_height(vp) - rect_height(cp);
+
+		if (obj->content->v_align == ALIGN_MIDDLE) {
+			offset /= 2;
+		}
+
+		cp = rect_move(cp, pair_new(0, offset));
+	}
+
+	obj->content->child.vp = cp;
 }
 
-static void bitmap_render(struct Base *base, struct Rect w, struct Rect s)
+static void bitmap_render(struct Base *base, struct Rect pvp, struct Rect svp)
 {
-	struct Bitmap *obj = (struct Bitmap *)base;
+	struct Box *box = (struct Box *)base;
+	struct Bitmap *obj = &box->content->child.bitmap;
+	struct Rect vp = rect_new(pvp.x1 + box->padding, pvp.y1 + box->padding, pvp.x2 - box->padding, pvp.y2 - box->padding);
+	struct Rect cp = rect_move(box->content->child.vp, pair_new(pvp.x1, pvp.y1));
 
-	draw_bitmap(rect_move(rect_new(0, 0, obj->width - 1, obj->height - 1), pair_new(w.x1, w.y1)), s, obj->color, obj->bitmap);
+	draw_rect(svp, box->color);
+
+	svp = rect_intersect(vp, svp);
+
+	draw_bitmap2(pair_new(cp.x1, cp.y1), svp, obj->bitmap, obj->index, obj->color);
 }
-
-struct Box {
-	struct Base base;
-
-	int padding;
-	uint32_t color;
-
-	struct {
-		int width;
-		int height;
-	};
-
-	struct {
-		struct Rect child_vp;
-		struct Base *child;
-	};
-};
 
 static int box_get_width(struct Base *base)
 {
@@ -588,7 +396,7 @@ static int box_get_width(struct Base *base)
 	}
 
 	if (obj->width == INHERIT_CHILD) {
-		int width = obj->child->get_width(obj->child);
+		int width = obj->content->child.base->get_width(obj->content->child.base);
 
 		if (width == INHERIT_PARENT) {
 			return INHERIT_PARENT;
@@ -609,7 +417,7 @@ static int box_get_height(struct Base *base)
 	}
 
 	if (obj->height == INHERIT_CHILD) {
-		int height = obj->child->get_height(obj->child);
+		int height = obj->content->child.base->get_height(obj->content->child.base);
 
 		if (height == INHERIT_PARENT) {
 			return INHERIT_PARENT;
@@ -621,39 +429,33 @@ static int box_get_height(struct Base *base)
 	return obj->height;
 }
 
-static void box_layout(struct Base *base)
+static void box_layout(struct Base *base, struct Pair size)
 {
 	struct Box *obj = (struct Box *)base;
 
-	base->vp = rect_new(base->vp.x1 + obj->padding, base->vp.y1 + obj->padding, base->vp.x2 - obj->padding, base->vp.y2 - obj->padding);
-
-	if (obj->child) {
-		obj->child->vp = base->vp;
-		obj->child->layout(obj->child);
+	if (obj->content == NULL) {
+		return;
 	}
+
+	obj->content->child.vp = rect_new(obj->padding, obj->padding, size.w - 1 - obj->padding, size.h - 1 - obj->padding);
+	obj->content->child.base->layout(obj->content->child.base, rect_size(obj->content->child.vp));
 }
 
-static void box_render(struct Base *base, struct Rect w, struct Rect s)
+static void box_render(struct Base *base, struct Rect pvp, struct Rect svp)
 {
 	struct Box *obj = (struct Box *)base;
 
-	draw_rect(rect_intersect(base->vp, rect_intersect(w, s)), obj->color);
+	draw_rect(svp, obj->color);
 
-	if (obj->child) {
-		obj->child->render(obj->child, w, s);
+	if (obj->content) {
+		child_box_render(&obj->content->child, pvp, svp);
 	}
 }
-
-struct Text {
-	struct Base base;
-
-	const char *text;
-	uint32_t color;
-};
 
 static int text_get_width(struct Base *base)
 {
-	struct Text *obj = (struct Text *)base;
+	struct Text *obj = &((struct Box *)base)->content->child.text;
+
 	return FONT_W * strlen(obj->text);
 }
 
@@ -664,369 +466,372 @@ static int text_get_height(struct Base *base)
 
 static void render_text(struct Base *base, struct Rect w, struct Rect s)
 {
-	struct Text *obj = (struct Text *)base;
+	struct Text *obj = &((struct Box *)base)->content->child.text;
 
 	draw_text(w, s, obj->color, obj->text);
 }
 
-static struct Table app = {
-	.base = {
-		.layout = table_layout,
-		.render = table_render,
-	},
-	.rows = 2,
-	.cols = 1,
-	.row = (int[]) {
-		100,
-		INHERIT_PARENT,
-	},
-	.col = (int[]) {
-		INHERIT_PARENT,
-	},
-	.child = (struct Base*[]) {
-		(struct Base *)&(struct Table) {
-			.base = {
-				.layout = table_layout,
-				.render = table_render,
-			},
-			.rows = 1,
-			.cols = 3,
-			.row = (int[]) {
-				INHERIT_PARENT,
-			},
-			.col = (int[]) {
-				INHERIT_PARENT, INHERIT_PARENT, INHERIT_PARENT,
-			},
-			.child = (struct Base*[]) {
-				(struct Base *)&(struct List) {
-					.base = {
-						.layout = list_layout,
-						.render = list_render,
-					},
-					.horizontal = 1,
-					.children = 4,
-					.child = (struct Base*[]) {
-						(struct Base *)&(struct Box) {
-							.base = {
-								.get_width = box_get_width,
-								.get_height = box_get_height,
-								.layout = box_layout,
-								.render = box_render,
-							},
-							.width = INHERIT_CHILD,
-							.height = INHERIT_CHILD,
-							.padding = 2,
-							.color = 0x2d89ef,
-							.child = (struct Base *)&(struct Bitmap) {
-								.base = {
-									.get_width = bitmap_get_width,
-									.get_height = bitmap_get_height,
-									.layout = dummy_layout,
-									.render = bitmap_render,
-								},
-								.bitmap = &icon[0 * ICON_W * ICON_H / 8],
-								.width = ICON_W,
-								.height = ICON_H,
-								.color = 0xeff4ff,
-							},
-						},
-						(struct Base *)&(struct Box) {
-							.base = {
-								.get_width = box_get_width,
-								.get_height = box_get_height,
-								.layout = box_layout,
-								.render = box_render,
-							},
-							.width = INHERIT_CHILD,
-							.height = INHERIT_CHILD,
-							.padding = 2,
-							.color = 0x2d89ef,
-							.child = (struct Base *)&(struct Bitmap) {
-								.base = {
-									.get_width = bitmap_get_width,
-									.get_height = bitmap_get_height,
-									.layout = dummy_layout,
-									.render = bitmap_render,
-								},
-								.bitmap = &icon[1 * ICON_W * ICON_H / 8],
-								.width = ICON_W,
-								.height = ICON_H,
-								.color = 0xeff4ff,
-							},
-						},
-						(struct Base *)&(struct Box) {
-							.base = {
-								.get_width = box_get_width,
-								.get_height = box_get_height,
-								.layout = box_layout,
-								.render = box_render,
-							},
-							.width = INHERIT_CHILD,
-							.height = INHERIT_CHILD,
-							.padding = 2,
-							.color = 0x2d89ef,
-							.child = (struct Base *)&(struct Bitmap) {
-								.base = {
-									.get_width = bitmap_get_width,
-									.get_height = bitmap_get_height,
-									.layout = dummy_layout,
-									.render = bitmap_render,
-								},
-								.bitmap = &icon[2 * ICON_W * ICON_H / 8],
-								.width = ICON_W,
-								.height = ICON_H,
-								.color = 0xeff4ff,
-							},
-						},
-						(struct Base *)&(struct Box) {
-							.base = {
-								.get_width = box_get_width,
-								.get_height = box_get_height,
-								.layout = box_layout,
-								.render = box_render,
-							},
-							.width = INHERIT_CHILD,
-							.height = INHERIT_CHILD,
-							.padding = 2,
-							.color = 0x2d89ef,
-							.child = (struct Base *)&(struct Bitmap) {
-								.base = {
-									.get_width = bitmap_get_width,
-									.get_height = bitmap_get_height,
-									.layout = dummy_layout,
-									.render = bitmap_render,
-								},
-								.bitmap = &icon[3 * ICON_W * ICON_H / 8],
-								.width = ICON_W,
-								.height = ICON_H,
-								.color = 0xeff4ff,
-							},
-						},
-					},
-				},
-				(struct Base *)&(struct List) {
-					.base = {
-						.layout = list_layout,
-						.render = list_render,
-					},
-					.horizontal = 1,
-					.justify = 1,
-					.children = 3,
-					.child = (struct Base*[]) {
-						(struct Base *)&(struct Box) {
-							.base = {
-								.get_width = box_get_width,
-								.get_height = box_get_height,
-								.layout = box_layout,
-								.render = box_render,
-							},
-							.width = INHERIT_CHILD,
-							.height = INHERIT_CHILD,
-							.padding = 2,
-							.color = 0x2d89ef,
-							.child = (struct Base *)&(struct Bitmap) {
-								.base = {
-									.get_width = bitmap_get_width,
-									.get_height = bitmap_get_height,
-									.layout = dummy_layout,
-									.render = bitmap_render,
-								},
-								.bitmap = &icon[8 * ICON_W * ICON_H / 8],
-								.width = ICON_W,
-								.height = ICON_H,
-								.color = 0xeff4ff,
-							},
-						},
-						(struct Base *)&(struct Text) {
-							.base = {
-								.get_width = text_get_width,
-								.get_height = text_get_height,
-								.layout = dummy_layout,
-								.render = render_text,
-							},
-							.text = "7 / 101",
-							.color = 0xeff4ff,
-						},
-						(struct Base *)&(struct Box) {
-							.base = {
-								.get_width = box_get_width,
-								.get_height = box_get_height,
-								.layout = box_layout,
-								.render = box_render,
-							},
-							.width = INHERIT_CHILD,
-							.height = INHERIT_CHILD,
-							.padding = 2,
-							.color = 0x2d89ef,
-							.child = (struct Base *)&(struct Bitmap) {
-								.base = {
-									.get_width = bitmap_get_width,
-									.get_height = bitmap_get_height,
-									.layout = dummy_layout,
-									.render = bitmap_render,
-								},
-								.bitmap = &icon[4 * ICON_W * ICON_H / 8],
-								.width = ICON_W,
-								.height = ICON_H,
-								.color = 0xeff4ff,
-							},
-						},
-					},
-				},
-				(struct Base *)&(struct List) {
-					.base = {
-						.layout = list_layout,
-						.render = list_render,
-					},
-					.horizontal = 1,
-					.justify = 2,
-					.children = 5,
-					.child = (struct Base*[]) {
-						(struct Base *)&(struct Box) {
-							.base = {
-								.get_width = box_get_width,
-								.get_height = box_get_height,
-								.layout = box_layout,
-								.render = box_render,
-							},
-							.width = INHERIT_CHILD,
-							.height = INHERIT_CHILD,
-							.padding = 2,
-							.color = 0x2d89ef,
-							.child = (struct Base *)&(struct Bitmap) {
-								.base = {
-									.get_width = bitmap_get_width,
-									.get_height = bitmap_get_height,
-									.layout = dummy_layout,
-									.render = bitmap_render,
-								},
-								.bitmap = &icon[6 * ICON_W * ICON_H / 8],
-								.width = ICON_W,
-								.height = ICON_H,
-								.color = 0xeff4ff,
-							},
-						},
-						(struct Base *)&(struct Box) {
-							.base = {
-								.get_width = box_get_width,
-								.get_height = box_get_height,
-								.layout = box_layout,
-								.render = box_render,
-							},
-							.width = INHERIT_CHILD,
-							.height = INHERIT_CHILD,
-							.padding = 2,
-							.color = 0x2d89ef,
-							.child = (struct Base *)&(struct Bitmap) {
-								.base = {
-									.get_width = bitmap_get_width,
-									.get_height = bitmap_get_height,
-									.layout = dummy_layout,
-									.render = bitmap_render,
-								},
-								.bitmap = &icon[7 * ICON_W * ICON_H / 8],
-								.width = ICON_W,
-								.height = ICON_H,
-								.color = 0xeff4ff,
-							},
-						},
-						(struct Base *)&(struct Box) {
-							.base = {
-								.get_width = box_get_width,
-								.get_height = box_get_height,
-								.layout = box_layout,
-								.render = box_render,
-							},
-							.width = INHERIT_CHILD,
-							.height = INHERIT_CHILD,
-							.padding = 2,
-							.color = 0x2d89ef,
-							.child = (struct Base *)&(struct Bitmap) {
-								.base = {
-									.get_width = bitmap_get_width,
-									.get_height = bitmap_get_height,
-									.layout = dummy_layout,
-									.render = bitmap_render,
-								},
-								.bitmap = &icon[9 * ICON_W * ICON_H / 8],
-								.width = ICON_W,
-								.height = ICON_H,
-								.color = 0xeff4ff,
-							},
-						},
-						(struct Base *)&(struct Box) {
-							.base = {
-								.get_width = box_get_width,
-								.get_height = box_get_height,
-								.layout = box_layout,
-								.render = box_render,
-							},
-							.width = INHERIT_CHILD,
-							.height = INHERIT_CHILD,
-							.padding = 2,
-							.color = 0x2d89ef,
-							.child = (struct Base *)&(struct Bitmap) {
-								.base = {
-									.get_width = bitmap_get_width,
-									.get_height = bitmap_get_height,
-									.layout = dummy_layout,
-									.render = bitmap_render,
-								},
-								.bitmap = &icon[10 * ICON_W * ICON_H / 8],
-								.width = ICON_W,
-								.height = ICON_H,
-								.color = 0xeff4ff,
-							},
-						},
-						(struct Base *)&(struct Box) {
-							.base = {
-								.get_width = box_get_width,
-								.get_height = box_get_height,
-								.layout = box_layout,
-								.render = box_render,
-							},
-							.width = INHERIT_CHILD,
-							.height = INHERIT_CHILD,
-							.padding = 2,
-							.color = 0x2d89ef,
-							.child = (struct Base *)&(struct Bitmap) {
-								.base = {
-									.get_width = bitmap_get_width,
-									.get_height = bitmap_get_height,
-									.layout = dummy_layout,
-									.render = bitmap_render,
-								},
-								.bitmap = &icon[5 * ICON_W * ICON_H / 8],
-								.width = ICON_W,
-								.height = ICON_H,
-								.color = 0xeff4ff,
-							},
-						},
-					},
-				},
-			},
-		},
-		(struct Base *)&(struct Box) {
-			.base = {
-				.get_width = box_get_width,
-				.get_height = box_get_height,
-				.layout = box_layout,
-				.render = box_render,
-			},
-			.width = INHERIT_PARENT,
-			.height = INHERIT_PARENT,
-			.color = 0xeff4ff,
-		},
-	},
+struct Table {
+	struct Box box;
+
+	int space;
+
+	int rows;
+	int cols;
+
+	int *row;
+	int *col;
 };
+
+static int table_calc_even(int *dim, int cnt, int vp)
+{
+	int wo_dim = 0;
+	int total_dim = vp;
+
+	for (int i = 0; i < cnt; i++) {
+		if (dim[i] < 0) {
+			wo_dim++;
+		} else {
+			total_dim -= dim[i];
+		}
+	}
+
+	if (wo_dim) {
+		return total_dim / wo_dim;
+	}
+
+	return 0;
+}
+
+static void table_layout(struct Base *base, struct Pair size)
+{
+	struct Table *obj = (struct Table *)base;
+	int even_width = table_calc_even(obj->col, obj->cols, size.w - (obj->cols - 1) * obj->space);
+	int even_height = table_calc_even(obj->row, obj->rows, size.h - (obj->rows - 1) * obj->space);
+	int y = 0;
+
+	for (int i = 0; i < obj->rows; i++) {
+		int dim_r = obj->row[i];
+		int x = 0;
+		int h;
+
+		if (dim_r < 0) {
+			h = even_height;
+		} else {
+			h = dim_r;
+		}
+
+		for (int j = 0; j < obj->cols; j++) {
+			struct ChildBox *c = &obj->box.content->childs[i * obj->cols + j];
+			int dim_c = obj->col[j];
+			int w;
+
+			if (dim_c < 0) {
+				w = even_width;
+			} else {
+				w = dim_c;
+			}
+
+			c->vp = rect_new(x, y, x + w - 1, y + h - 1);
+
+			x += w;
+			x += obj->space;
+		}
+
+		x -= obj->space;
+
+		if (x >= size.w) {
+			int offset = size.w - x + 1;
+
+			for (int j = 0; j < obj->cols; j++) {
+				struct ChildBox *c = &obj->box.content->childs[i * obj->cols + j];
+				int dim_c = obj->col[j];
+
+				if (dim_c < 0) {
+					c->vp = rect_new(c->vp.x1, c->vp.y1, c->vp.x2 + offset, c->vp.y2);
+					break;
+				}
+			}
+		}
+
+		y += h;
+		y += obj->space;
+	}
+
+	y -= obj->space;
+
+	if (y >= size.h) {
+		int offset = size.h - y + 1;
+
+		for (int i = 0; i < obj->rows; i++) {
+			int dim_r = obj->row[i];
+
+			if (dim_r < 0) {
+				for (int j = 0; j < obj->cols; j++) {
+					struct ChildBox *c = &obj->box.content->childs[i * obj->cols + j];
+
+					c->vp = rect_new(c->vp.x1, c->vp.y1, c->vp.x2, c->vp.y2 + offset);
+				}
+			}
+		}
+	}
+
+	for (int i = 0; i < obj->rows; i++) {
+		for (int j = 0; j < obj->cols; j++) {
+			struct ChildBox *c = &obj->box.content->childs[i * obj->cols + j];
+
+			c->base->layout(c->base, rect_size(c->vp));
+		}
+	}
+}
+
+static void table_render(struct Base *base, struct Rect pvp, struct Rect svp)
+{
+	struct Table *obj = (struct Table *)base;
+
+	for (int i = 0; i < obj->rows; i++) {
+		for (int j = 0; j < obj->cols; j++) {
+			struct ChildBox *c = &obj->box.content->childs[i * obj->cols + j];
+
+			child_box_render(c, pvp, svp);
+		}
+	}
+}
+
+struct List {
+	struct Box box;
+
+	int horizontal;
+	int align;
+	int space;
+};
+
+static void list_layout(struct Base *base, struct Pair size)
+{
+	struct List *obj = (struct List *)base;
+	int x = 0;
+	int y = 0;
+
+	if (obj->horizontal) {
+		for (int i = 0; i < obj->box.content->children; i++) {
+			struct ChildBox *c = &obj->box.content->childs[i];
+			int width = c->base->get_width(c->base);
+
+			c->vp = rect_new(x, y, x + width - 1, size.h - 1);
+
+			x += width;
+			x += obj->space;
+		}
+
+		x -= obj->space;
+	} else {
+		for (int i = 0; i < obj->box.content->children; i++) {
+			struct ChildBox *c = &obj->box.content->childs[i];
+			int height = c->base->get_height(c->base);
+
+			c->vp = rect_new(x, y, size.w - 1, y + height - 1);
+
+			y += height;
+			y += obj->space;
+		}
+
+		y -= obj->space;
+	}
+
+	if (obj->align) {
+		if (obj->horizontal) {
+			int offset = size.w - x;
+
+			if (offset > 0) {
+				if (obj->align == ALIGN_MIDDLE) {
+					offset /= 2;
+				}
+
+				for (int i = 0; i < obj->box.content->children; i++) {
+					struct ChildBox *c = &obj->box.content->childs[i];
+
+					c->vp = rect_move(c->vp, pair_new(offset, 0));
+				}
+			}
+		} else {
+			int offset = size.h - y;
+
+			if (offset > 0) {
+				if (obj->align == ALIGN_MIDDLE) {
+					offset /= 2;
+				}
+
+				for (int i = 0; i < obj->box.content->children; i++) {
+					struct ChildBox *c = &obj->box.content->childs[i];
+
+					c->vp = rect_move(c->vp, pair_new(0, offset));
+				}
+			}
+		}
+	}
+
+	for (int i = 0; i < obj->box.content->children; i++) {
+		struct ChildBox *c = &obj->box.content->childs[i];
+
+		c->base->layout(c->base, rect_size(c->vp));
+	}
+}
+
+static void list_render(struct Base *base, struct Rect pvp, struct Rect svp)
+{
+	struct List *obj = (struct List *)base;
+
+	for (int i = 0; i < obj->box.content->children; i++) {
+		struct ChildBox *c = &obj->box.content->childs[i];
+
+		child_box_render(c, pvp, svp);
+	}
+}
+
+#define GROUP(...) { __VA_ARGS__ }
+
+#define UI_CHILDS(child) { .base = (struct Base *)&child }
+
+#define UI_TABLE(_rows, _cols, _row, _col, ...) \
+	(struct Table) { \
+		.rows = _rows, \
+		.cols = _cols, \
+		.row = (int[]) _row, \
+		.col = (int[]) _col, \
+		.space = 2, \
+		.box = { \
+			.base = { \
+				.layout = table_layout, \
+				.render = table_render, \
+			}, \
+			.width = INHERIT_PARENT, \
+			.height = INHERIT_PARENT, \
+			.content = &(struct BoxContent) { \
+				.childs = (struct ChildBox[]) { \
+					__VA_ARGS__ \
+				}, \
+			}, \
+		}, \
+	}
+
+#define UI_LIST(_horizontal, _align, _children, ...) \
+	(struct List) { \
+		.horizontal = _horizontal, \
+		.align = _align, \
+		.space = 2, \
+		.box = { \
+			.base = { \
+				.layout = list_layout, \
+				.render = list_render, \
+			}, \
+			.width = INHERIT_PARENT, \
+			.height = INHERIT_PARENT, \
+			.content = &(struct BoxContent) { \
+				.children = _children, \
+				.childs = (struct ChildBox[]) { \
+					__VA_ARGS__ \
+				}, \
+			}, \
+		}, \
+	}
+
+#define UI_BITMAP(_index) \
+	(struct Box) { \
+		.base = { \
+			.get_width = bitmap_get_width, \
+			.get_height = bitmap_get_height, \
+			.layout = bitmap_layout, \
+			.render = bitmap_render, \
+		}, \
+		.width = INHERIT_CHILD, \
+		.height = INHERIT_CHILD, \
+		.padding = 2, \
+		.color = 0x2d89ef, \
+		.content = &(struct BoxContent) { \
+			.h_align = ALIGN_MIDDLE, \
+			.v_align = ALIGN_MIDDLE, \
+			.child = { \
+				.bitmap = { \
+					.bitmap = &icon, \
+					.index = _index, \
+					.color = 0xeff4ff, \
+				}, \
+			}, \
+		}, \
+	}
+
+#define UI_TEXT(_text) \
+	(struct Box) { \
+		.base = { \
+			.get_width = text_get_width, \
+			.get_height = text_get_height, \
+			.layout = dummy_layout, \
+			.render = render_text, \
+		}, \
+		.width = INHERIT_CHILD, \
+		.height = INHERIT_CHILD, \
+		.content = &(struct BoxContent) { \
+			.child = { \
+				.text = { \
+					.font = font, \
+					.text = _text, \
+					.color = 0xeff4ff, \
+				}, \
+			}, \
+		}, \
+	}
+
+#define UI_BOX(_width, _height, _padding, _color) \
+	(struct Box) { \
+		.base = { \
+			.get_width = box_get_width, \
+			.get_height = box_get_height, \
+			.layout = box_layout, \
+			.render = box_render, \
+		}, \
+		.width = _width, \
+		.height = _height, \
+		.padding = _padding, \
+		.color = _color, \
+	}
+
+static struct Table app = UI_TABLE(2, 1, GROUP(40, -1), GROUP(-1),
+	UI_CHILDS(
+		UI_TABLE(1, 3, GROUP(-1), GROUP(-1, -1, -1),
+			UI_CHILDS(
+				UI_LIST(1, 0, 4,
+					UI_CHILDS(UI_BITMAP(0)),
+					UI_CHILDS(UI_BITMAP(1)),
+					UI_CHILDS(UI_BITMAP(2)),
+					UI_CHILDS(UI_BITMAP(3)),
+				)
+			),
+			UI_CHILDS(
+				UI_LIST(1, 1, 3,
+					UI_CHILDS(UI_BITMAP(8)),
+					UI_CHILDS(UI_TEXT("7 / 101")),
+					UI_CHILDS(UI_BITMAP(4)),
+				)
+			),
+			UI_CHILDS(
+				UI_LIST(1, 2, 5,
+					UI_CHILDS(UI_BITMAP(6)),
+					UI_CHILDS(UI_BITMAP(7)),
+					UI_CHILDS(UI_BITMAP(9)),
+					UI_CHILDS(UI_BITMAP(10)),
+					UI_CHILDS(UI_BITMAP(5)),
+				)
+			),
+		)
+	),
+	UI_CHILDS(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
+);
 
 static void render_app(struct Base *base, struct Rect w)
 {
-	draw_rect(w,  0x2b5797);
+	draw_rect(w, 0x2b5797);
 
-	base->vp = w;
-
-	base->layout(base);
+	base->layout(base, rect_size(w));
 	base->render(base, w, w);
 }
 
