@@ -258,7 +258,8 @@ struct ChildBox {
 enum Align {
 	ALIGN_BEGIN,
 	ALIGN_MIDDLE,
-	ALIGN_END
+	ALIGN_END,
+	ALIGN_EVEN,
 };
 
 struct BoxContent {
@@ -520,7 +521,7 @@ static void bitmap_process_event(struct Base *base, struct Event ev)
 	switch (ev.type) {
 	case EV_CURSOR_DOWN:
 	case EV_ACTIVATE:
-		box->color = 0x1298e1;
+		box->color = 0x4caf50;
 		break;
 	case EV_DEACTIVATE:
 		box->color = 0x01579b;
@@ -746,37 +747,157 @@ struct Table {
 
 	int *row;
 	int *col;
+	int *c_row;
+	int *c_col;
 };
 
-static int table_calc_even(int *dim, int cnt, int vp)
+static int table_get_width(struct Base *base)
 {
-	int wo_dim = 0;
-	int total_dim = vp;
+	struct Table *obj = (struct Table *)base;
+	int w_max = INHERIT_PARENT;
 
-	for (int i = 0; i < cnt; i++) {
-		if (dim[i] < 0) {
-			wo_dim++;
-		} else {
-			total_dim -= dim[i];
+	for (int i = 0; i < obj->rows; i++) {
+		for (int j = 0; j < obj->cols; j++) {
+			struct ChildBox *c = &obj->box.content->childs[i * obj->cols + j];
+			int cw = c->base->get_width(c->base);
+
+			if (cw > w_max) {
+				w_max = cw;
+			}
 		}
 	}
 
-	if (wo_dim) {
-		return total_dim / wo_dim;
+	return w_max;
+}
+
+static int table_get_height(struct Base *base)
+{
+	struct Table *obj = (struct Table *)base;
+	int h_max = INHERIT_PARENT;
+
+	for (int i = 0; i < obj->rows; i++) {
+		for (int j = 0; j < obj->cols; j++) {
+			struct ChildBox *c = &obj->box.content->childs[i * obj->cols + j];
+			int ch = c->base->get_width(c->base);
+
+			if (ch > h_max) {
+				h_max = ch;
+			}
+		}
 	}
 
-	return 0;
+	return h_max;
+}
+
+static int table_get_even_width(struct Base *base, struct Pair size)
+{
+	struct Table *obj = (struct Table *)base;
+	int even_width = 0;
+	int total_w = 0;
+	int iwow = 0;
+
+	for (int j = 0; j < obj->cols; j++) {
+		int dim_c = obj->col[j];
+		int w = INHERIT_PARENT;
+
+		if (dim_c < 0) {
+			if (dim_c == INHERIT_CHILD) {
+				int w_max = 0;
+
+				for (int i = 0; i < obj->rows; i++) {
+					struct ChildBox *c = &obj->box.content->childs[i * obj->cols + j];
+					int cw = c->base->get_width(c->base);
+
+					if (cw > w_max) {
+						w_max = cw;
+					}
+				}
+
+				if (w_max >= 0) {
+					w = w_max;
+				}
+			}
+		} else {
+			w = dim_c;
+		}
+
+		obj->c_col[j] = w;
+
+		if (w >= 0) {
+			total_w += w;
+		} else {
+			iwow++;
+		}
+	}
+
+	if (iwow) {
+		even_width = size.w - (obj->cols - 1) * obj->space;
+		even_width -= total_w;
+		even_width /= iwow;
+	}
+
+	return even_width;
+}
+
+static int table_get_even_height(struct Base *base, struct Pair size)
+{
+	struct Table *obj = (struct Table *)base;
+	int even_height = 0;
+	int total_h = 0;
+	int iwoh = 0;
+
+	for (int i = 0; i < obj->rows; i++) {
+		int dim_r = obj->row[i];
+		int h = INHERIT_PARENT;
+
+		if (dim_r < 0) {
+			if (dim_r == INHERIT_CHILD) {
+				int h_max = 0;
+
+				for (int j = 0; j < obj->cols; j++) {
+					struct ChildBox *c = &obj->box.content->childs[i * obj->cols + j];
+					int ch = c->base->get_height(c->base);
+
+					if (ch > h_max) {
+						h_max = ch;
+					}
+				}
+
+				if (h_max >= 0) {
+					h = h_max;
+				}
+			}
+		} else {
+			h = dim_r;
+		}
+
+		obj->c_row[i] = h;
+
+		if (h >= 0) {
+			total_h += h;
+		} else {
+			iwoh++;
+		}
+	}
+
+	if (iwoh) {
+		even_height = size.h - (obj->rows - 1) * obj->space;
+		even_height -= total_h;
+		even_height /= iwoh;
+	}
+
+	return even_height;
 }
 
 static void table_layout(struct Base *base, struct Pair size)
 {
 	struct Table *obj = (struct Table *)base;
-	int even_width = table_calc_even(obj->col, obj->cols, size.w - (obj->cols - 1) * obj->space);
-	int even_height = table_calc_even(obj->row, obj->rows, size.h - (obj->rows - 1) * obj->space);
+	int even_width = table_get_even_width(base, size);
+	int even_height = table_get_even_height(base, size);
 	int y = 0;
 
 	for (int i = 0; i < obj->rows; i++) {
-		int dim_r = obj->row[i];
+		int dim_r = obj->c_row[i];
 		int x = 0;
 		int h;
 
@@ -788,7 +909,7 @@ static void table_layout(struct Base *base, struct Pair size)
 
 		for (int j = 0; j < obj->cols; j++) {
 			struct ChildBox *c = &obj->box.content->childs[i * obj->cols + j];
-			int dim_c = obj->col[j];
+			int dim_c = obj->c_col[j];
 			int w;
 
 			if (dim_c < 0) {
@@ -810,7 +931,7 @@ static void table_layout(struct Base *base, struct Pair size)
 
 			for (int j = 0; j < obj->cols; j++) {
 				struct ChildBox *c = &obj->box.content->childs[i * obj->cols + j];
-				int dim_c = obj->col[j];
+				int dim_c = obj->c_col[j];
 
 				if (dim_c < 0) {
 					c->vp = rect_new(c->vp.x1, c->vp.y1, c->vp.x2 + offset, c->vp.y2);
@@ -829,7 +950,7 @@ static void table_layout(struct Base *base, struct Pair size)
 		int offset = size.h - y + 1;
 
 		for (int i = 0; i < obj->rows; i++) {
-			int dim_r = obj->row[i];
+			int dim_r = obj->c_row[i];
 
 			if (dim_r < 0) {
 				for (int j = 0; j < obj->cols; j++) {
@@ -889,6 +1010,72 @@ struct List {
 	int space;
 };
 
+static int list_get_width(struct Base *base)
+{
+	struct List *obj = (struct List *)base;
+	int w_max = INHERIT_PARENT;
+
+	if (obj->box.width == INHERIT_PARENT) {
+		return INHERIT_PARENT;
+	}
+
+	if (obj->box.width >= 0) {
+		return obj->box.width;
+	}
+
+	for (int i = 0; i < obj->box.content->children; i++) {
+		struct ChildBox *c = &obj->box.content->childs[i];
+		int cw = c->base->get_width(c->base);
+
+		if (obj->horizontal) {
+			if (cw < 0) {
+				return cw;
+			}
+
+			w_max += cw;
+		} else {
+			if (cw > w_max) {
+				w_max = cw;
+			}
+		}
+	}
+
+	return w_max;
+}
+
+static int list_get_height(struct Base *base)
+{
+	struct List *obj = (struct List *)base;
+	int h_max = INHERIT_PARENT;
+
+	if (obj->box.height == INHERIT_PARENT) {
+		return INHERIT_PARENT;
+	}
+
+	if (obj->box.height >= 0) {
+		return obj->box.height;
+	}
+
+	for (int i = 0; i < obj->box.content->children; i++) {
+		struct ChildBox *c = &obj->box.content->childs[i];
+		int ch = c->base->get_height(c->base);
+
+		if (obj->horizontal) {
+			if (ch > h_max) {
+				h_max = ch;
+			}
+		} else {
+			if (ch < 0) {
+				return ch;
+			}
+
+			h_max += ch;
+		}
+	}
+
+	return h_max;
+}
+
 static void list_layout(struct Base *base, struct Pair size)
 {
 	struct List *obj = (struct List *)base;
@@ -896,9 +1083,34 @@ static void list_layout(struct Base *base, struct Pair size)
 	int y = 0;
 
 	if (obj->horizontal) {
+		int even_width = 0;
+		int total_w = 0;
+		int iwow = 0;
+
+		for (int i = 0; i < obj->box.content->children; i++) {
+			struct ChildBox *c = &obj->box.content->childs[i];
+			int cw = c->base->get_width(c->base);
+
+			if (cw >= 0) {
+				total_w += cw;
+			} else {
+				iwow++;
+			}
+		}
+
+		if (iwow) {
+			even_width = size.w - (obj->box.content->children - 1) * obj->space;
+			even_width -= total_w;
+			even_width /= iwow;
+		}
+
 		for (int i = 0; i < obj->box.content->children; i++) {
 			struct ChildBox *c = &obj->box.content->childs[i];
 			int width = c->base->get_width(c->base);
+
+			if (width < 0) {
+				width = even_width;
+			}
 
 			c->vp = rect_new(x, y, x + width - 1, size.h - 1);
 
@@ -908,9 +1120,34 @@ static void list_layout(struct Base *base, struct Pair size)
 
 		x -= obj->space;
 	} else {
+		int even_height = 0;
+		int total_h = 0;
+		int iwoh = 0;
+
+		for (int i = 0; i < obj->box.content->children; i++) {
+			struct ChildBox *c = &obj->box.content->childs[i];
+			int ch = c->base->get_height(c->base);
+
+			if (ch >= 0) {
+				total_h += ch;
+			} else {
+				iwoh++;
+			}
+		}
+
+		if (iwoh) {
+			even_height = size.h - (obj->box.content->children - 1) * obj->space;
+			even_height -= total_h;
+			even_height /= iwoh;
+		}
+
 		for (int i = 0; i < obj->box.content->children; i++) {
 			struct ChildBox *c = &obj->box.content->childs[i];
 			int height = c->base->get_height(c->base);
+
+			if (height < 0) {
+				height = even_height;
+			}
 
 			c->vp = rect_new(x, y, size.w - 1, y + height - 1);
 
@@ -997,9 +1234,13 @@ static struct Base *list_pick(struct Base *base, struct Rect pvp, struct Rect sv
 		.cols = _cols, \
 		.row = (int[]) _row, \
 		.col = (int[]) _col, \
+		.c_row = (int[]) _row, \
+		.c_col = (int[]) _col, \
 		.space = 2, \
 		.box = { \
 			.base = { \
+				.get_width = table_get_width, \
+				.get_height = table_get_height, \
 				.layout = table_layout, \
 				.render = table_render, \
 				.pick = table_pick, \
@@ -1021,6 +1262,8 @@ static struct Base *list_pick(struct Base *base, struct Rect pvp, struct Rect sv
 		.space = 2, \
 		.box = { \
 			.base = { \
+				.get_width = list_get_width, \
+				.get_height = list_get_height, \
 				.layout = list_layout, \
 				.render = list_render, \
 				.pick = list_pick, \
@@ -1115,20 +1358,20 @@ static struct Base *list_pick(struct Base *base, struct Rect pvp, struct Rect sv
 			.width = _width, \
 			.height = _height, \
 			.padding = _padding, \
-			.color = 0x1298e1, \
+			.color = 0x01579b, \
 			.content = &(struct BoxContent) { \
 				.children = 2, \
 				.childs = (struct ChildBox[]) { \
-					UI_CHILDS(UI_BOX(10, 10, 0, 0)), \
+					UI_CHILDS(UI_BOX(4, 4, 0, 0)), \
 					UI_CHILDS(UI_BOX(16, 16, 0, 0xeff4ff, .pick = dummy_pick)), \
 				}, \
 			}, \
 		}, \
 	}
 
-struct Table app = UI_TABLE(3, 1, GROUP(40, 100 + 40, -1), GROUP(-1),
+struct List app = UI_LIST(0, ALIGN_EVEN, 3,
 	UI_CHILDS(
-		UI_TABLE(1, 3, GROUP(-1), GROUP(-1, -1, -1),
+		UI_LIST(1, ALIGN_EVEN, 3,
 			UI_CHILDS(
 				UI_LIST(1, ALIGN_BEGIN, 4,
 					UI_CHILDS(UI_BITMAP(0)),
@@ -1156,12 +1399,18 @@ struct Table app = UI_TABLE(3, 1, GROUP(40, 100 + 40, -1), GROUP(-1),
 		)
 	),
 	UI_CHILDS(
-		UI_TABLE(1, 7, GROUP(-1), GROUP(80, 100, 40, 100, 40, 40, -1),
-			UI_CHILDS(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
-			UI_CHILDS(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
-			UI_CHILDS(UI_SLIDER(INHERIT_PARENT, INHERIT_PARENT, 0, 0)),
-			UI_CHILDS(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
-			UI_CHILDS(UI_SLIDER(INHERIT_PARENT, INHERIT_PARENT, 0, 0)),
+		UI_LIST(1, ALIGN_EVEN, 7,
+			UI_CHILDS(UI_BOX(100, INHERIT_PARENT, 0, 0xeff4ff)),
+			UI_CHILDS(UI_SLIDER(40, INHERIT_PARENT, 0, 0)),
+			UI_CHILDS(
+				UI_LIST(0, ALIGN_EVEN, 3,
+					UI_CHILDS(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0)),
+					UI_CHILDS(UI_TEXT("RGB 255 255 255")),
+					UI_CHILDS(UI_TEXT("HSV 180 100 100")),
+				)
+			),
+			UI_CHILDS(UI_BOX(100, INHERIT_PARENT, 0, 0xeff4ff)),
+			UI_CHILDS(UI_SLIDER(40, INHERIT_PARENT, 0, 0)),
 			UI_CHILDS(
 				UI_LIST(0, ALIGN_BEGIN, 3,
 					UI_CHILDS(UI_BITMAP(13)),
