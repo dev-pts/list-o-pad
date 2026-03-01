@@ -143,6 +143,14 @@ struct BitmapFont {
 	struct BitmapData *bitmap;
 };
 
+enum Event {
+	EV_CURSOR_DOWN,
+	EV_CURSOR_MOVE,
+	EV_CURSOR_UP,
+	EV_ACTIVATE,
+	EV_DEACTIVATE,
+};
+
 struct Base {
 	/* Parent may ask the element about its sizes */
 	int (*get_width)(struct Base *obj);
@@ -150,9 +158,12 @@ struct Base {
 
 	/* size - your box, layout there as you want */
 	void (*layout)(struct Base *obj, struct Pair size);
-	/* pvp is just a element's vp in the screen coordinates,
+	/* pvp is just an element's vp in the screen coordinates,
 	 * svp - scissored pvp */
 	void (*render)(struct Base *obj, struct Rect pvp, struct Rect svp);
+
+	struct Base *(*pick)(struct Base *obj, struct Rect pvp, struct Rect svp, struct Pair p);
+	void (*process_event)(struct Base *obj, enum Event ev);
 };
 
 struct Bitmap {
@@ -318,7 +329,34 @@ static void child_box_render(struct ChildBox *c, struct Rect pvp, struct Rect sv
 		return;
 	}
 
-	c->base->render(c->base, vp, rect_intersect(vp, svp));
+	svp = rect_intersect(vp, svp);
+
+	if (!rect_valid(svp)) {
+		return;
+	}
+
+	c->base->render(c->base, vp, svp);
+}
+
+static struct Base *child_box_pick(struct ChildBox *c, struct Rect pvp, struct Rect svp, struct Pair p)
+{
+	if (c->base->pick == NULL) {
+		return NULL;
+	}
+
+	struct Rect vp = rect_move(c->vp, pair_new(pvp.x1, pvp.y1));
+
+	if (!rect_valid(vp)) {
+		return NULL;
+	}
+
+	svp = rect_intersect(vp, svp);
+
+	if (!rect_valid(svp)) {
+		return NULL;
+	}
+
+	return c->base->pick(c->base, vp, svp, p);
 }
 
 static void dummy_layout(struct Base *base, struct Pair size)
@@ -385,6 +423,37 @@ static void bitmap_render(struct Base *base, struct Rect pvp, struct Rect svp)
 	svp = rect_intersect(vp, svp);
 
 	draw_bitmap2(pair_new(cp.x1, cp.y1), svp, obj->bitmap, obj->index, obj->color);
+}
+
+static struct Base *bitmap_pick(struct Base *base, struct Rect pvp, struct Rect svp, struct Pair p)
+{
+	struct Box *box = (struct Box *)base;
+	struct Rect vp = rect_new(pvp.x1 + box->padding, pvp.y1 + box->padding, pvp.x2 - box->padding, pvp.y2 - box->padding);
+
+	svp = rect_intersect(vp, svp);
+
+	if (rect_hit(svp, p)) {
+		return base;
+	}
+
+	return NULL;
+}
+
+static void bitmap_process_event(struct Base *base, enum Event ev)
+{
+	struct Box *box = (struct Box *)base;
+
+	switch (ev) {
+	case EV_CURSOR_DOWN:
+	case EV_ACTIVATE:
+		box->color = 0x1298e1;
+		break;
+	case EV_DEACTIVATE:
+		box->color = 0x01579b;
+		break;
+	default:
+		break;
+	}
 }
 
 static int box_get_width(struct Base *base)
@@ -598,6 +667,24 @@ static void table_render(struct Base *base, struct Rect pvp, struct Rect svp)
 	}
 }
 
+static struct Base *table_pick(struct Base *base, struct Rect pvp, struct Rect svp, struct Pair p)
+{
+	struct Table *obj = (struct Table *)base;
+
+	for (int i = 0; i < obj->rows; i++) {
+		for (int j = 0; j < obj->cols; j++) {
+			struct ChildBox *c = &obj->box.content->childs[i * obj->cols + j];
+			struct Base *ret = child_box_pick(c, pvp, svp, p);
+
+			if (ret) {
+				return ret;
+			}
+		}
+	}
+
+	return NULL;
+}
+
 struct List {
 	struct Box box;
 
@@ -688,6 +775,22 @@ static void list_render(struct Base *base, struct Rect pvp, struct Rect svp)
 	}
 }
 
+static struct Base *list_pick(struct Base *base, struct Rect pvp, struct Rect svp, struct Pair p)
+{
+	struct Table *obj = (struct Table *)base;
+
+	for (int i = 0; i < obj->box.content->children; i++) {
+		struct ChildBox *c = &obj->box.content->childs[i];
+		struct Base *ret = child_box_pick(c, pvp, svp, p);
+
+		if (ret) {
+			return ret;
+		}
+	}
+
+	return NULL;
+}
+
 #define GROUP(...) { __VA_ARGS__ }
 
 #define UI_CHILDS(child) { .base = (struct Base *)&child }
@@ -703,6 +806,7 @@ static void list_render(struct Base *base, struct Rect pvp, struct Rect svp)
 			.base = { \
 				.layout = table_layout, \
 				.render = table_render, \
+				.pick = table_pick, \
 			}, \
 			.width = INHERIT_PARENT, \
 			.height = INHERIT_PARENT, \
@@ -723,6 +827,7 @@ static void list_render(struct Base *base, struct Rect pvp, struct Rect svp)
 			.base = { \
 				.layout = list_layout, \
 				.render = list_render, \
+				.pick = list_pick, \
 			}, \
 			.width = INHERIT_PARENT, \
 			.height = INHERIT_PARENT, \
@@ -742,11 +847,13 @@ static void list_render(struct Base *base, struct Rect pvp, struct Rect svp)
 			.get_height = bitmap_get_height, \
 			.layout = bitmap_layout, \
 			.render = bitmap_render, \
+			.pick = bitmap_pick, \
+			.process_event = bitmap_process_event, \
 		}, \
 		.width = INHERIT_CHILD, \
 		.height = INHERIT_CHILD, \
 		.padding = 2, \
-		.color = 0x2d89ef, \
+		.color = 0x01579b, \
 		.content = &(struct BoxContent) { \
 			.h_align = ALIGN_MIDDLE, \
 			.v_align = ALIGN_MIDDLE, \
@@ -754,7 +861,7 @@ static void list_render(struct Base *base, struct Rect pvp, struct Rect svp)
 				.bitmap = { \
 					.bitmap = &icon, \
 					.index = _index, \
-					.color = 0xeff4ff, \
+					.color = 0xffffff, \
 				}, \
 			}, \
 		}, \
@@ -829,7 +936,7 @@ static struct Table app = UI_TABLE(2, 1, GROUP(40, -1), GROUP(-1),
 
 static void render_app(struct Base *base, struct Rect w)
 {
-	draw_rect(w, 0x2b5797);
+	draw_rect(w, 0x01579b);
 
 	base->layout(base, rect_size(w));
 	base->render(base, w, w);
@@ -864,7 +971,8 @@ int main()
 		return -1;
 	}
 
-	render_app((struct Base *)&app, rect_new(0, 0, H_RES - 1, V_RES - 1));
+	struct Base *new_pick = NULL;
+	struct Base *picked = NULL;
 
 	while (1) {
 		SDL_Event e;
@@ -877,24 +985,46 @@ int main()
 			case SDL_WINDOWEVENT:
 				switch (e.window.event) {
 				case SDL_WINDOWEVENT_EXPOSED:
-					//ui_redraw();
+					render_app((struct Base *)&app, rect_new(0, 0, H_RES - 1, V_RES - 1));
 					break;
 				}
 				break;
-			case SDL_MOUSEMOTION:
-				//controller_mouse_moved(e.motion.x, e.motion.y);
-				break;
 			case SDL_MOUSEBUTTONDOWN:
-#if 0
-				if (controller_mouse_pressed())
-					SDL_CaptureMouse(SDL_TRUE);
-#endif
+				new_pick = app.box.base.pick(&app.box.base, rect_new(0, 0, H_RES - 1, V_RES - 1), rect_new(0, 0, H_RES - 1, V_RES - 1), pair_new(e.button.x, e.button.y));
+
+				if (picked && picked != new_pick) {
+					picked->process_event(picked, EV_DEACTIVATE);
+				}
+				picked = new_pick;
+
+				if (picked) {
+					picked->process_event(picked, EV_CURSOR_DOWN);
+					render_app((struct Base *)&app, rect_new(0, 0, H_RES - 1, V_RES - 1));
+				}
+
+				break;
+			case SDL_MOUSEMOTION:
+				if (picked) {
+					picked->process_event(picked, EV_CURSOR_MOVE);
+					render_app((struct Base *)&app, rect_new(0, 0, H_RES - 1, V_RES - 1));
+				}
 				break;
 			case SDL_MOUSEBUTTONUP:
-#if 0
-				if (controller_mouse_released())
-					SDL_CaptureMouse(SDL_FALSE);
-#endif
+				new_pick = app.box.base.pick(&app.box.base, rect_new(0, 0, H_RES - 1, V_RES - 1), rect_new(0, 0, H_RES - 1, V_RES - 1), pair_new(e.button.x, e.button.y));
+
+				if (picked == NULL) {
+					break;
+				}
+
+				if (picked == new_pick) {
+					picked->process_event(picked, EV_ACTIVATE);
+				} else {
+					picked->process_event(picked, EV_CURSOR_UP);
+					picked->process_event(picked, EV_DEACTIVATE);
+					picked = NULL;
+				}
+
+				render_app((struct Base *)&app, rect_new(0, 0, H_RES - 1, V_RES - 1));
 				break;
 			}
 		}
