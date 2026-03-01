@@ -1,6 +1,64 @@
+//#define FPGA
+
+#ifndef FPGA
 #include <stdio.h>
 #include <stdint.h>
 #include <SDL2/SDL.h>
+
+#include <time.h>
+
+static uint64_t ts_ns()
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	return (uint64_t)ts.tv_sec * 1000000000LL + (uint64_t)ts.tv_nsec;
+}
+
+static struct {
+	const char *str;
+	uint64_t diff;
+	uint64_t cnt;
+} perf[65536];
+
+#define MEASURE(...) \
+	do { \
+		uint64_t t1 = ts_ns(); \
+		do { \
+			__VA_ARGS__; \
+		} while (0); \
+		uint64_t t2 = ts_ns(); \
+		perf[__LINE__].str = #__VA_ARGS__; \
+		perf[__LINE__].diff += t2 - t1; \
+		perf[__LINE__].cnt++; \
+	} while (0)
+
+static void dump_measures(void)
+{
+	printf("--------------------------------\n");
+	for (int i = 0; i < 65536; i++) {
+		if (perf[i].cnt) {
+			printf("%.*s...: %li, %li\n", 30, perf[i].str, perf[i].cnt, perf[i].diff / perf[i].cnt);
+		}
+	}
+	memset(perf, 0, sizeof(perf));
+}
+
+#else
+#define MEASURE(...) __VA_ARGS__
+
+typedef unsigned char uint8_t;
+typedef unsigned int uint32_t;
+typedef unsigned int size_t;
+
+#define NULL ((void *)0)
+
+size_t strlen(const char *s)
+{
+	int i = 0;
+	for (; s[i]; i++) {}
+	return i;
+}
+#endif
 
 #define H_RES 600
 #define V_RES 1024
@@ -117,7 +175,9 @@ static int rect_hit(struct Rect r, struct Pair p)
 
 static void rect_dump(struct Rect r)
 {
+#ifndef FPGA
 	printf("%i, %i, %i, %i\n", r.x1, r.y1, r.x2, r.y2);
+#endif
 }
 
 static void draw_rect(struct Rect r, uint32_t color)
@@ -902,7 +962,7 @@ static struct Base *list_pick(struct Base *base, struct Rect pvp, struct Rect sv
 		.color = _color, \
 	}
 
-static struct Table app = UI_TABLE(2, 1, GROUP(40, -1), GROUP(-1),
+struct Table app = UI_TABLE(2, 1, GROUP(40, -1), GROUP(-1),
 	UI_CHILDS(
 		UI_TABLE(1, 3, GROUP(-1), GROUP(-1, -1, -1),
 			UI_CHILDS(
@@ -916,7 +976,7 @@ static struct Table app = UI_TABLE(2, 1, GROUP(40, -1), GROUP(-1),
 			UI_CHILDS(
 				UI_LIST(1, 1, 3,
 					UI_CHILDS(UI_BITMAP(8)),
-					UI_CHILDS(UI_TEXT("7 / 101")),
+					UI_CHILDS(UI_TEXT("__7 / 101")),
 					UI_CHILDS(UI_BITMAP(4)),
 				)
 			),
@@ -942,6 +1002,7 @@ static void render_app(struct Base *base, struct Rect w)
 	base->render(base, w, w);
 }
 
+#ifndef FPGA
 int main()
 {
 	if (SDL_Init(SDL_INIT_VIDEO) < 0) {
@@ -959,7 +1020,7 @@ int main()
 		return -1;
 	}
 
-	sdl_renderer = SDL_CreateRenderer(sdl_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+	sdl_renderer = SDL_CreateRenderer(sdl_window, -1, SDL_RENDERER_ACCELERATED);
 	if (!sdl_renderer) {
 		printf("Renderer creation failed: %s\n", SDL_GetError());
 		return -1;
@@ -1041,3 +1102,4 @@ int main()
 
 	return 0;
 }
+#endif
