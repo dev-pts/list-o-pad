@@ -647,7 +647,7 @@ static void slider_layout(struct Base *base, struct Pair size)
 		} else {
 			obj->frac = (h - kh);
 
-			y = (h - kh) * obj->value / 100;
+			y = (h - kh) * (100 - obj->value) / 100;
 			h = kh;
 		}
 
@@ -717,7 +717,7 @@ static void slider_process_event(struct Base *base, struct Event ev)
 			if (obj->horizontal) {
 				diff = ev.p.x - obj->p.x;
 			} else {
-				diff = ev.p.y - obj->p.y;
+				diff = obj->p.y - ev.p.y;
 			}
 			obj->value = obj->old_value + (knob->vp.x1 + diff) * 100 / obj->frac;
 
@@ -1102,7 +1102,7 @@ static struct Base *list_pick(struct Base *base, struct Rect pvp, struct Rect sv
 #define UI_SLIDER(_width, _height, _padding, _horizontal) \
 	(struct Slider) { \
 		.horizontal = _horizontal, \
-		.value = 50, \
+		.value = 0, \
 		.box = { \
 			.base = { \
 				.get_width = box_get_width, \
@@ -1120,7 +1120,7 @@ static struct Base *list_pick(struct Base *base, struct Rect pvp, struct Rect sv
 				.children = 2, \
 				.childs = (struct ChildBox[]) { \
 					UI_CHILDS(UI_BOX(10, 10, 0, 0)), \
-					UI_CHILDS(UI_BOX(10, 10, 0, 0xeff4ff, .pick = dummy_pick)), \
+					UI_CHILDS(UI_BOX(16, 16, 0, 0xeff4ff, .pick = dummy_pick)), \
 				}, \
 			}, \
 		}, \
