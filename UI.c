@@ -203,12 +203,18 @@ struct BitmapFont {
 	struct BitmapData *bitmap;
 };
 
-enum Event {
+enum EventType {
 	EV_CURSOR_DOWN,
 	EV_CURSOR_MOVE,
 	EV_CURSOR_UP,
 	EV_ACTIVATE,
 	EV_DEACTIVATE,
+};
+
+struct Event {
+	enum EventType type;
+
+	struct Pair p;
 };
 
 struct Base {
@@ -223,7 +229,7 @@ struct Base {
 	void (*render)(struct Base *obj, struct Rect pvp, struct Rect svp);
 
 	struct Base *(*pick)(struct Base *obj, struct Rect pvp, struct Rect svp, struct Pair p);
-	void (*process_event)(struct Base *obj, enum Event ev);
+	void (*process_event)(struct Base *obj, struct Event ev);
 };
 
 struct Bitmap {
@@ -423,6 +429,14 @@ static void dummy_layout(struct Base *base, struct Pair size)
 {
 }
 
+static struct Base *dummy_pick(struct Base *base, struct Rect pvp, struct Rect svp, struct Pair p)
+{
+	if (rect_hit(svp, p)) {
+		return base;
+	}
+	return NULL;
+}
+
 static int bitmap_get_width(struct Base *base)
 {
 	struct Box *box = (struct Box *)base;
@@ -499,11 +513,11 @@ static struct Base *bitmap_pick(struct Base *base, struct Rect pvp, struct Rect 
 	return NULL;
 }
 
-static void bitmap_process_event(struct Base *base, enum Event ev)
+static void bitmap_process_event(struct Base *base, struct Event ev)
 {
 	struct Box *box = (struct Box *)base;
 
-	switch (ev) {
+	switch (ev.type) {
 	case EV_CURSOR_DOWN:
 	case EV_ACTIVATE:
 		box->color = 0x1298e1;
@@ -598,6 +612,128 @@ static void render_text(struct Base *base, struct Rect w, struct Rect s)
 	struct Text *obj = &((struct Box *)base)->content->child.text;
 
 	draw_text(w, s, obj->color, obj->text);
+}
+
+struct Slider {
+	struct Box box;
+
+	int horizontal;
+	int value;
+	int frac;
+
+	struct Pair p;
+	int pressed;
+	int old_value;
+};
+
+static void slider_layout(struct Base *base, struct Pair size)
+{
+	struct Slider *obj = (struct Slider *)base;
+
+	{
+		struct ChildBox *knob = &obj->box.content->childs[1];
+		int kw = knob->base->get_width(knob->base);
+		int kh = knob->base->get_height(knob->base);
+		int x = 0;
+		int y = 0;
+		int w = size.w;
+		int h = size.h;
+
+		if (obj->horizontal) {
+			obj->frac = (w - kw);
+
+			x = (w - kw) * obj->value / 100;
+			w = kw;
+		} else {
+			obj->frac = (h - kh);
+
+			y = (h - kh) * obj->value / 100;
+			h = kh;
+		}
+
+		knob->vp = rect_new(x, y, x + w - 1, y + h - 1);
+	}
+
+	{
+		struct ChildBox *line = &obj->box.content->childs[0];
+		int lw = line->base->get_width(line->base);
+		int lh = line->base->get_height(line->base);
+		int x = 0;
+		int y = 0;
+		int w = size.w;
+		int h = size.h;
+
+		if (obj->horizontal) {
+			y = (h - lh) / 2;
+			h = lh;
+		} else {
+			x = (w - lw) / 2;
+			w = lw;
+		}
+
+		line->vp = rect_move(rect_new(0, 0, w, h), pair_new(x, y));
+	}
+}
+
+static void slider_render(struct Base *base, struct Rect pvp, struct Rect svp)
+{
+	struct Slider *obj = (struct Slider *)base;
+	struct ChildBox *line = &obj->box.content->childs[0];
+	struct ChildBox *knob = &obj->box.content->childs[1];
+	struct Box *box = &obj->box;
+
+	draw_rect(svp, box->color);
+
+	child_box_render(line, pvp, svp);
+	child_box_render(knob, pvp, svp);
+}
+
+static struct Base *slider_pick(struct Base *base, struct Rect pvp, struct Rect svp, struct Pair p)
+{
+	struct Slider *obj = (struct Slider *)base;
+	struct ChildBox *knob = &obj->box.content->childs[1];
+
+	if (child_box_pick(knob, pvp, svp, p)) {
+		return base;
+	}
+
+	return NULL;
+}
+
+static void slider_process_event(struct Base *base, struct Event ev)
+{
+	struct Slider *obj = (struct Slider *)base;
+	struct ChildBox *knob = &obj->box.content->childs[1];
+	int diff;
+
+	switch (ev.type) {
+	case EV_CURSOR_DOWN:
+		obj->p = ev.p;
+		obj->pressed = 1;
+		obj->old_value = obj->value;
+		break;
+	case EV_CURSOR_MOVE:
+		if (obj->pressed) {
+			if (obj->horizontal) {
+				diff = ev.p.x - obj->p.x;
+			} else {
+				diff = ev.p.y - obj->p.y;
+			}
+			obj->value = obj->old_value + (knob->vp.x1 + diff) * 100 / obj->frac;
+
+			if (obj->value < 0) {
+				obj->value = 0;
+			} else if (obj->value > 100) {
+				obj->value = 100;
+			}
+		}
+		break;
+	case EV_CURSOR_UP:
+		obj->pressed = 0;
+		break;
+	default:
+		break;
+	}
 }
 
 struct Table {
@@ -948,13 +1084,14 @@ static struct Base *list_pick(struct Base *base, struct Rect pvp, struct Rect sv
 		}, \
 	}
 
-#define UI_BOX(_width, _height, _padding, _color) \
+#define UI_BOX(_width, _height, _padding, _color, ...) \
 	(struct Box) { \
 		.base = { \
 			.get_width = box_get_width, \
 			.get_height = box_get_height, \
 			.layout = box_layout, \
 			.render = box_render, \
+			__VA_ARGS__ \
 		}, \
 		.width = _width, \
 		.height = _height, \
@@ -962,7 +1099,34 @@ static struct Base *list_pick(struct Base *base, struct Rect pvp, struct Rect sv
 		.color = _color, \
 	}
 
-struct Table app = UI_TABLE(2, 1, GROUP(40, -1), GROUP(-1),
+#define UI_SLIDER(_width, _height, _padding, _horizontal) \
+	(struct Slider) { \
+		.horizontal = _horizontal, \
+		.value = 50, \
+		.box = { \
+			.base = { \
+				.get_width = box_get_width, \
+				.get_height = box_get_height, \
+				.layout = slider_layout, \
+				.render = slider_render, \
+				.pick = slider_pick, \
+				.process_event = slider_process_event, \
+			}, \
+			.width = _width, \
+			.height = _height, \
+			.padding = _padding, \
+			.color = 0x1298e1, \
+			.content = &(struct BoxContent) { \
+				.children = 2, \
+				.childs = (struct ChildBox[]) { \
+					UI_CHILDS(UI_BOX(10, 10, 0, 0)), \
+					UI_CHILDS(UI_BOX(10, 10, 0, 0xeff4ff, .pick = dummy_pick)), \
+				}, \
+			}, \
+		}, \
+	}
+
+struct Table app = UI_TABLE(3, 1, GROUP(40, 100 + 40, -1), GROUP(-1),
 	UI_CHILDS(
 		UI_TABLE(1, 3, GROUP(-1), GROUP(-1, -1, -1),
 			UI_CHILDS(
@@ -989,6 +1153,17 @@ struct Table app = UI_TABLE(2, 1, GROUP(40, -1), GROUP(-1),
 					UI_CHILDS(UI_BITMAP(5)),
 				)
 			),
+		)
+	),
+	UI_CHILDS(
+		UI_TABLE(1, 7, GROUP(-1), GROUP(80, 100, 40, 100, 40, 40, -1),
+			UI_CHILDS(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
+			UI_CHILDS(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
+			UI_CHILDS(UI_SLIDER(INHERIT_PARENT, INHERIT_PARENT, 0, 0)),
+			UI_CHILDS(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
+			UI_CHILDS(UI_SLIDER(INHERIT_PARENT, INHERIT_PARENT, 0, 0)),
+			UI_CHILDS(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
+			UI_CHILDS(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
 		)
 	),
 	UI_CHILDS(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
@@ -1054,19 +1229,19 @@ int main()
 				new_pick = app.box.base.pick(&app.box.base, rect_new(0, 0, H_RES - 1, V_RES - 1), rect_new(0, 0, H_RES - 1, V_RES - 1), pair_new(e.button.x, e.button.y));
 
 				if (picked && picked != new_pick) {
-					picked->process_event(picked, EV_DEACTIVATE);
+					picked->process_event(picked, (struct Event) { EV_DEACTIVATE });
 				}
 				picked = new_pick;
 
 				if (picked) {
-					picked->process_event(picked, EV_CURSOR_DOWN);
+					picked->process_event(picked, (struct Event) { EV_CURSOR_DOWN, pair_new(e.button.x, e.button.y) });
 					render_app((struct Base *)&app, rect_new(0, 0, H_RES - 1, V_RES - 1));
 				}
 
 				break;
 			case SDL_MOUSEMOTION:
 				if (picked) {
-					picked->process_event(picked, EV_CURSOR_MOVE);
+					picked->process_event(picked, (struct Event) { EV_CURSOR_MOVE, pair_new(e.motion.x, e.motion.y) });
 					render_app((struct Base *)&app, rect_new(0, 0, H_RES - 1, V_RES - 1));
 				}
 				break;
@@ -1077,11 +1252,12 @@ int main()
 					break;
 				}
 
+				picked->process_event(picked, (struct Event) { EV_CURSOR_UP, pair_new(e.button.x, e.button.y) });
+
 				if (picked == new_pick) {
-					picked->process_event(picked, EV_ACTIVATE);
+					picked->process_event(picked, (struct Event) { EV_ACTIVATE });
 				} else {
-					picked->process_event(picked, EV_CURSOR_UP);
-					picked->process_event(picked, EV_DEACTIVATE);
+					picked->process_event(picked, (struct Event) { EV_DEACTIVATE });
 					picked = NULL;
 				}
 
@@ -1093,8 +1269,28 @@ int main()
 		SDL_UpdateTexture(sdl_texture, NULL, fb, H_RES * 4);
 		SDL_RenderCopy(sdl_renderer, sdl_texture, NULL, NULL);
 		SDL_RenderPresent(sdl_renderer);
+
+#if 0
+		for (int i = 0; i < 100; i++) {
+			if (SDL_PollEvent(&e)) {
+				if (e.type == SDL_QUIT) {
+					goto out;
+				}
+			}
+
+			app.row[1]++;
+			render_app((struct Base *)&app, rect_new(0, 0, H_RES - 1, V_RES - 1));
+
+			SDL_UpdateTexture(sdl_texture, NULL, fb, H_RES * 4);
+			SDL_RenderCopy(sdl_renderer, sdl_texture, NULL, NULL);
+			SDL_RenderPresent(sdl_renderer);
+
+			SDL_Delay(20);
+		}
+#endif
 	}
 
+out:
 	SDL_DestroyTexture(sdl_texture);
 	SDL_DestroyRenderer(sdl_renderer);
 	SDL_DestroyWindow(sdl_window);
