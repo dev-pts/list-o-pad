@@ -853,131 +853,82 @@ static int list_get_height(struct Base *base)
 static void list_layout(struct Base *base, struct Pair size)
 {
 	struct List *obj = (struct List *)base;
-	int x = 0;
-	int y = 0;
+
+#define LIST_LAYOUT(_method, _size, _dim, _dim_size, _dim_offset) \
+	do { \
+		int x = 0; \
+		int y = 0; \
+		int even_size = 0; \
+		int last_size = 0; \
+		int total_size = 0; \
+		int iwos = 0; \
+		int width = size.x; \
+		int height = size.y; \
+\
+		for (int i = 0; i < obj->children; i++) { \
+			struct ChildBox *c = &obj->child[i]; \
+			int cs = c->base->_method(c->base); \
+\
+			if (cs >= 0) { \
+				total_size += cs; \
+			} else { \
+				iwos++; \
+			} \
+		} \
+\
+		total_size += (obj->children - 1) * obj->space; \
+\
+		if (iwos) { \
+			even_size = _size - total_size; \
+			last_size = (even_size + iwos - 1) / iwos; \
+			even_size /= iwos; \
+		} \
+\
+		for (int i = 0; i < obj->children; i++) { \
+			struct ChildBox *c = &obj->child[i]; \
+			_dim_size = c->base->_method(c->base); \
+\
+			if (_dim_size < 0) { \
+				_dim_size = even_size; \
+\
+				iwos--; \
+				if (iwos == 0) { \
+					_dim_size = last_size; \
+				} \
+			} \
+\
+			c->vp = rect_new(x, y, x + width - 1, y + height - 1); \
+\
+			_dim += _dim_size; \
+			_dim += obj->space; \
+		} \
+\
+		_dim -= obj->space; \
+\
+		if (obj->align) { \
+			int x_offset = 0; \
+			int y_offset = 0; \
+\
+			_dim_offset = _size - _dim; \
+\
+			if (_dim_offset > 0) { \
+				if (obj->align == ALIGN_MIDDLE) { \
+					_dim_offset /= 2; \
+				} \
+\
+				for (int i = 0; i < obj->children; i++) { \
+					struct ChildBox *c = &obj->child[i]; \
+\
+					c->vp = rect_move(c->vp, pair_new(x_offset, y_offset)); \
+				} \
+			} \
+		} \
+	} while (0)
 
 	if (obj->horizontal) {
-		int even_width = 0;
-		int last_width = 0;
-		int total_w = 0;
-		int iwow = 0;
-
-		for (int i = 0; i < obj->children; i++) {
-			struct ChildBox *c = &obj->child[i];
-			int cw = c->base->get_width(c->base);
-
-			if (cw >= 0) {
-				total_w += cw;
-			} else {
-				iwow++;
-			}
-		}
-
-		total_w += (obj->children - 1) * obj->space;
-
-		if (iwow) {
-			even_width = size.w - total_w;
-			last_width = (even_width + iwow - 1) / iwow;
-			even_width /= iwow;
-		}
-
-		for (int i = 0; i < obj->children; i++) {
-			struct ChildBox *c = &obj->child[i];
-			int width = c->base->get_width(c->base);
-
-			if (width < 0) {
-				width = even_width;
-
-				iwow--;
-				if (iwow == 0) {
-					width = last_width;
-				}
-			}
-
-			c->vp = rect_new(x, y, x + width - 1, size.h - 1);
-
-			x += width;
-			x += obj->space;
-		}
-
-		x -= obj->space;
+		LIST_LAYOUT(get_width, size.w, x, width, x_offset);
 	} else {
-		int even_height = 0;
-		int last_height = 0;
-		int total_h = 0;
-		int iwoh = 0;
-
-		for (int i = 0; i < obj->children; i++) {
-			struct ChildBox *c = &obj->child[i];
-			int ch = c->base->get_height(c->base);
-
-			if (ch >= 0) {
-				total_h += ch;
-			} else {
-				iwoh++;
-			}
-		}
-
-		total_h += (obj->children - 1) * obj->space;
-
-		if (iwoh) {
-			even_height = size.h - total_h;
-			last_height = (even_height + iwoh - 1) / iwoh;
-			even_height /= iwoh;
-		}
-
-		for (int i = 0; i < obj->children; i++) {
-			struct ChildBox *c = &obj->child[i];
-			int height = c->base->get_height(c->base);
-
-			if (height < 0) {
-				height = even_height;
-
-				iwoh--;
-				if (iwoh == 0) {
-					height = last_height;
-				}
-			}
-
-			c->vp = rect_new(x, y, size.w - 1, y + height - 1);
-
-			y += height;
-			y += obj->space;
-		}
-
-		y -= obj->space;
-	}
-
-	if (obj->align) {
-		if (obj->horizontal) {
-			int offset = size.w - x;
-
-			if (offset > 0) {
-				if (obj->align == ALIGN_MIDDLE) {
-					offset /= 2;
-				}
-
-				for (int i = 0; i < obj->children; i++) {
-					struct ChildBox *c = &obj->child[i];
-
-					c->vp = rect_move(c->vp, pair_new(offset, 0));
-				}
-			}
-		} else {
-			int offset = size.h - y;
-
-			if (offset > 0) {
-				if (obj->align == ALIGN_MIDDLE) {
-					offset /= 2;
-				}
-
-				for (int i = 0; i < obj->children; i++) {
-					struct ChildBox *c = &obj->child[i];
-
-					c->vp = rect_move(c->vp, pair_new(0, offset));
-				}
-			}
-		}
+		LIST_LAYOUT(get_height, size.h, y, height, y_offset);
 	}
 
 	for (int i = 0; i < obj->children; i++) {
