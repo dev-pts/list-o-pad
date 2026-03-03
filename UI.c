@@ -410,8 +410,10 @@ struct Slider {
 	int pressed;
 	int old_value;
 
-	struct ChildBox *knob;
-	struct ChildBox *line;
+	struct {
+		int size;
+		struct ChildBox *c;
+	} knob, line;
 };
 
 static void child_box_render(struct ChildBox *c, struct Rect pvp, struct Rect svp)
@@ -478,27 +480,6 @@ static int color_box_get_height(struct Base *base)
 	return obj->width;
 }
 
-static void color_box_render(struct Base *base, struct Rect pvp, struct Rect svp)
-{
-	struct Box *obj = (struct Box *)base;
-
-	draw_rect(svp, obj->bc.content.color);
-}
-
-static int bitmap_get_width(struct Base *base)
-{
-	struct PictureBitmap *obj = (struct PictureBitmap *)base;
-
-	return obj->bc.content.bitmap->bc->size.w + obj->bc.padding * 2;
-}
-
-static int bitmap_get_height(struct Base *base)
-{
-	struct PictureBitmap *obj = (struct PictureBitmap *)base;
-
-	return obj->bc.content.bitmap->bc->size.h + obj->bc.padding * 2;
-}
-
 static void box_content_layout(struct BoxContent *bc, struct Pair content_size, struct Pair layout_size)
 {
 	if (content_size.w < 0) {
@@ -535,6 +516,37 @@ static void box_content_layout(struct BoxContent *bc, struct Pair content_size, 
 	}
 
 	bc->content.vp = cp;
+}
+
+static void color_box_layout(struct Base *base, struct Pair size)
+{
+	struct Box *obj = (struct Box *)base;
+
+	box_content_layout(&obj->bc, pair_new(obj->width, obj->height), size);
+}
+
+static void color_box_render(struct Base *base, struct Rect pvp, struct Rect svp)
+{
+	struct Box *obj = (struct Box *)base;
+	struct BoxContent *bc = &obj->bc;
+	struct Rect sv = rect_new(pvp.x1 + bc->padding, pvp.y1 + bc->padding, pvp.x2 - bc->padding, pvp.y2 - bc->padding);
+	struct Rect cv = rect_move(bc->content.vp, pair_new(pvp.x1, pvp.y1));
+
+	draw_rect(rect_intersect(cv, sv), obj->bc.content.color);
+}
+
+static int bitmap_get_width(struct Base *base)
+{
+	struct PictureBitmap *obj = (struct PictureBitmap *)base;
+
+	return obj->bc.content.bitmap->bc->size.w + obj->bc.padding * 2;
+}
+
+static int bitmap_get_height(struct Base *base)
+{
+	struct PictureBitmap *obj = (struct PictureBitmap *)base;
+
+	return obj->bc.content.bitmap->bc->size.h + obj->bc.padding * 2;
 }
 
 static void bitmap_layout(struct Base *base, struct Pair size)
@@ -697,9 +709,9 @@ static void slider_layout(struct Base *base, struct Pair size)
 	struct Slider *obj = (struct Slider *)base;
 
 	{
-		struct ChildBox *knob = obj->knob;
-		int kw = knob->base->get_width(knob->base);
-		int kh = knob->base->get_height(knob->base);
+		struct ChildBox *knob = obj->knob.c;
+		int kw = obj->knob.size;
+		int kh = obj->knob.size;
 		int x = 0;
 		int y = 0;
 		int w = size.w;
@@ -718,12 +730,13 @@ static void slider_layout(struct Base *base, struct Pair size)
 		}
 
 		knob->vp = rect_new(x, y, x + w - 1, y + h - 1);
+		knob->base->layout(knob->base, rect_size(knob->vp));
 	}
 
 	{
-		struct ChildBox *line = obj->line;
-		int lw = line->base->get_width(line->base);
-		int lh = line->base->get_height(line->base);
+		struct ChildBox *line = obj->line.c;
+		int lw = obj->line.size;
+		int lh = obj->line.size;
 		int x = 0;
 		int y = 0;
 		int w = size.w;
@@ -738,6 +751,7 @@ static void slider_layout(struct Base *base, struct Pair size)
 		}
 
 		line->vp = rect_move(rect_new(0, 0, w, h), pair_new(x, y));
+		line->base->layout(line->base, rect_size(line->vp));
 	}
 }
 
@@ -745,15 +759,15 @@ static void slider_render(struct Base *base, struct Rect pvp, struct Rect svp)
 {
 	struct Slider *obj = (struct Slider *)base;
 
-	child_box_render(obj->line, pvp, svp);
-	child_box_render(obj->knob, pvp, svp);
+	child_box_render(obj->line.c, pvp, svp);
+	child_box_render(obj->knob.c, pvp, svp);
 }
 
 static struct Base *slider_pick(struct Base *base, struct Rect pvp, struct Rect svp, struct Pair p)
 {
 	struct Slider *obj = (struct Slider *)base;
 
-	if (child_box_pick(obj->knob, pvp, svp, p)) {
+	if (child_box_pick(obj->knob.c, pvp, svp, p)) {
 		return base;
 	}
 
@@ -778,7 +792,7 @@ static void slider_process_event(struct Base *base, struct Event ev)
 			} else {
 				diff = obj->p.y - ev.p.y;
 			}
-			obj->value = obj->old_value + (obj->knob->vp.x1 + diff) * 100 / obj->frac;
+			obj->value = obj->old_value + (obj->knob.c->vp.x1 + diff) * 100 / obj->frac;
 
 			if (obj->value < 0) {
 				obj->value = 0;
@@ -980,7 +994,7 @@ static struct Base *list_pick(struct Base *base, struct Rect pvp, struct Rect sv
 		}, \
 		.horizontal = _horizontal, \
 		.align = _align, \
-		.space = 2, \
+		.space = 4, \
 		.children = _children, \
 		.child = (struct ChildBox[]) { \
 			__VA_ARGS__ \
@@ -1030,7 +1044,7 @@ static struct Base *list_pick(struct Base *base, struct Rect pvp, struct Rect sv
 		.base = { \
 			.get_width = color_box_get_width, \
 			.get_height = color_box_get_height, \
-			.layout = dummy_layout, \
+			.layout = color_box_layout, \
 			.render = color_box_render, \
 			__VA_ARGS__ \
 		}, \
@@ -1038,6 +1052,8 @@ static struct Base *list_pick(struct Base *base, struct Rect pvp, struct Rect sv
 		.height = _height, \
 		.bc = { \
 			.padding = _padding, \
+			.h_align = ALIGN_MIDDLE, \
+			.v_align = ALIGN_MIDDLE, \
 			.content = { \
 				.color = _color, \
 			}, \
@@ -1071,8 +1087,14 @@ static struct Base *list_pick(struct Base *base, struct Rect pvp, struct Rect sv
 		}, \
 		.horizontal = _horizontal, \
 		.value = 0, \
-		.line = UI_CHILDREF(UI_BOX(4, 4, 0, 0)), \
-		.knob = UI_CHILDREF(UI_BOX(16, 16, 0, 0xeff4ff, .pick = dummy_pick)), \
+		.line = { \
+			.size = 4, \
+			.c = UI_CHILDREF(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0)), \
+		}, \
+		.knob = { \
+			.size = 16, \
+			.c = UI_CHILDREF(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff, .pick = dummy_pick)), \
+		}, \
 	}
 
 struct List app = UI_LIST(0, ALIGN_BEGIN, 3,
@@ -1113,7 +1135,7 @@ struct List app = UI_LIST(0, ALIGN_BEGIN, 3,
 	UI_CHILD(
 		UI_WRAPPER(INHERIT_PARENT, 140, 0,
 			UI_LIST(1, ALIGN_BEGIN, 7,
-				UI_CHILD(UI_BOX(100, INHERIT_PARENT, 0, 0xeff4ff)),
+				UI_CHILD(UI_BOX(100, 100, 0, 0xeff4ff)),
 				UI_CHILD(
 					UI_WRAPPER(40, INHERIT_PARENT, 0,
 						UI_SLIDER(0, 0)
@@ -1128,7 +1150,7 @@ struct List app = UI_LIST(0, ALIGN_BEGIN, 3,
 						)
 					)
 				),
-				UI_CHILD(UI_BOX(100, INHERIT_PARENT, 0, 0xeff4ff)),
+				UI_CHILD(UI_BOX(100, 100, 0, 0xeff4ff)),
 				UI_CHILD(
 					UI_WRAPPER(40, INHERIT_PARENT, 0,
 						UI_SLIDER(0, 0)
