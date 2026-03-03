@@ -11,9 +11,9 @@ with open(sys.argv[1], "rb") as f:
 
         if l.startswith('FONTBOUNDINGBOX'):
             _, w, h, x, y = l.strip().split(' ')
-            print(f'''static struct BitmapFont icon = {{
+            print(f'''static struct BitmapClass icon = {{
 \t.size = {{ .w = {w}, .h = {h} }},
-\t.bitmap = (struct BitmapData[]) {{''')
+\t.bd = (struct BitmapData[]) {{''')
             continue
 
         if l.startswith('ENCODING'):
