@@ -349,7 +349,6 @@ enum Align {
 	ALIGN_BEGIN,
 	ALIGN_MIDDLE,
 	ALIGN_END,
-	ALIGN_EVEN,
 };
 
 #define INHERIT_PARENT -1
@@ -880,8 +879,8 @@ static void list_layout(struct Base *base, struct Pair size)
 \
 		if (iwos) { \
 			even_size = _size - total_size; \
-			last_size = (even_size + iwos - 1) / iwos; \
 			even_size /= iwos; \
+			last_size = _size - total_size - even_size * (iwos - 1); \
 		} \
 \
 		for (int i = 0; i < obj->children; i++) { \
@@ -1076,9 +1075,9 @@ static struct Base *list_pick(struct Base *base, struct Rect pvp, struct Rect sv
 		.knob = UI_CHILDREF(UI_BOX(16, 16, 0, 0xeff4ff, .pick = dummy_pick)), \
 	}
 
-struct List app = UI_LIST(0, ALIGN_EVEN, 3,
+struct List app = UI_LIST(0, ALIGN_BEGIN, 3,
 	UI_CHILD(
-		UI_LIST(1, ALIGN_EVEN, 3,
+		UI_LIST(1, ALIGN_BEGIN, 3,
 			UI_CHILD(
 				UI_WRAPPER(INHERIT_PARENT, INHERIT_CHILD, 0,
 					UI_LIST(1, ALIGN_BEGIN, 4,
@@ -1113,7 +1112,7 @@ struct List app = UI_LIST(0, ALIGN_EVEN, 3,
 	),
 	UI_CHILD(
 		UI_WRAPPER(INHERIT_PARENT, 140, 0,
-			UI_LIST(1, ALIGN_EVEN, 7,
+			UI_LIST(1, ALIGN_BEGIN, 7,
 				UI_CHILD(UI_BOX(100, INHERIT_PARENT, 0, 0xeff4ff)),
 				UI_CHILD(
 					UI_WRAPPER(40, INHERIT_PARENT, 0,
@@ -1122,7 +1121,7 @@ struct List app = UI_LIST(0, ALIGN_EVEN, 3,
 				),
 				UI_CHILD(
 					UI_WRAPPER(INHERIT_CHILD, INHERIT_PARENT, 0,
-						UI_LIST(0, ALIGN_EVEN, 3,
+						UI_LIST(0, ALIGN_BEGIN, 3,
 							UI_CHILD(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0)),
 							UI_CHILD(UI_TEXT("RGB 255 255 255")),
 							UI_CHILD(UI_TEXT("HSV 180 100 100")),
