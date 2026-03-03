@@ -660,6 +660,20 @@ static void box_render(struct Base *base, struct Rect pvp, struct Rect svp)
 	child_box_render(&obj->bc.content, pvp, svp);
 }
 
+static struct Base *box_pick(struct Base *base, struct Rect pvp, struct Rect svp, struct Pair p)
+{
+	struct Box *obj = (struct Box *)base;
+	struct BoxContent *bc = &obj->bc;
+
+	if (bc->content.base == NULL) {
+		return base;
+	}
+
+	struct Rect vp = rect_new(pvp.x1 + bc->padding, pvp.y1 + bc->padding, pvp.x2 - bc->padding, pvp.y2 - bc->padding);
+
+	return child_box_pick(&bc->content, vp, svp, p);
+}
+
 static int text_get_width(struct Base *base)
 {
 	struct Text *obj = (struct Text *)base;
@@ -844,6 +858,7 @@ static void list_layout(struct Base *base, struct Pair size)
 
 	if (obj->horizontal) {
 		int even_width = 0;
+		int last_width = 0;
 		int total_w = 0;
 		int iwow = 0;
 
@@ -858,9 +873,11 @@ static void list_layout(struct Base *base, struct Pair size)
 			}
 		}
 
+		total_w += (obj->children - 1) * obj->space;
+
 		if (iwow) {
-			even_width = size.w - (obj->children - 1) * obj->space;
-			even_width -= total_w;
+			even_width = size.w - total_w;
+			last_width = (even_width + iwow - 1) / iwow;
 			even_width /= iwow;
 		}
 
@@ -870,6 +887,11 @@ static void list_layout(struct Base *base, struct Pair size)
 
 			if (width < 0) {
 				width = even_width;
+
+				iwow--;
+				if (iwow == 0) {
+					width = last_width;
+				}
 			}
 
 			c->vp = rect_new(x, y, x + width - 1, size.h - 1);
@@ -881,6 +903,7 @@ static void list_layout(struct Base *base, struct Pair size)
 		x -= obj->space;
 	} else {
 		int even_height = 0;
+		int last_height = 0;
 		int total_h = 0;
 		int iwoh = 0;
 
@@ -895,9 +918,11 @@ static void list_layout(struct Base *base, struct Pair size)
 			}
 		}
 
+		total_h += (obj->children - 1) * obj->space;
+
 		if (iwoh) {
-			even_height = size.h - (obj->children - 1) * obj->space;
-			even_height -= total_h;
+			even_height = size.h - total_h;
+			last_height = (even_height + iwoh - 1) / iwoh;
 			even_height /= iwoh;
 		}
 
@@ -907,6 +932,11 @@ static void list_layout(struct Base *base, struct Pair size)
 
 			if (height < 0) {
 				height = even_height;
+
+				iwoh--;
+				if (iwoh == 0) {
+					height = last_height;
+				}
 			}
 
 			c->vp = rect_new(x, y, size.w - 1, y + height - 1);
@@ -989,7 +1019,7 @@ static struct Base *list_pick(struct Base *base, struct Rect pvp, struct Rect sv
 #define UI_CHILD(child) { .base = (struct Base *)&child }
 #define UI_CHILDREF(child) &(struct ChildBox) { .base = (struct Base *)&child }
 
-#define UI_LIST(_width, _height, _horizontal, _align, _children, ...) \
+#define UI_LIST(_horizontal, _align, _children, ...) \
 	(struct List) { \
 		.base = { \
 			.get_width = list_get_width, \
@@ -1064,7 +1094,24 @@ static struct Base *list_pick(struct Base *base, struct Rect pvp, struct Rect sv
 		}, \
 	}
 
-#define UI_SLIDER(_width, _height, _padding, _horizontal) \
+#define UI_WRAPPER(_width, _height, _padding, _child) \
+	(struct Box) { \
+		.base = { \
+			.get_width = box_get_width, \
+			.get_height = box_get_height, \
+			.layout = box_layout, \
+			.render = box_render, \
+			.pick = box_pick, \
+		}, \
+		.width = _width, \
+		.height = _height, \
+		.bc = { \
+			.padding = _padding, \
+			.content = { .base = (struct Base *)&_child }, \
+		}, \
+	}
+
+#define UI_SLIDER(_padding, _horizontal) \
 	(struct Slider) { \
 		.base = { \
 			.layout = slider_layout, \
@@ -1078,68 +1125,78 @@ static struct Base *list_pick(struct Base *base, struct Rect pvp, struct Rect sv
 		.knob = UI_CHILDREF(UI_BOX(16, 16, 0, 0xeff4ff, .pick = dummy_pick)), \
 	}
 
-struct List app = UI_LIST(INHERIT_PARENT, INHERIT_PARENT, 0, ALIGN_EVEN, 3,
+struct List app = UI_LIST(0, ALIGN_EVEN, 3,
 	UI_CHILD(
-		UI_LIST(INHERIT_PARENT, 40, 1, ALIGN_EVEN, 3,
-#if 0
+		UI_LIST(1, ALIGN_EVEN, 3,
 			UI_CHILD(
-				UI_LIST(INHERIT_PARENT, INHERIT_PARENT, 1, ALIGN_BEGIN, 4,
-					UI_CHILD(UI_BITMAP(0)),
-					UI_CHILD(UI_BITMAP(1)),
-					UI_CHILD(UI_BITMAP(2)),
-					UI_CHILD(UI_BITMAP(3)),
-				)
-			),
-#endif
-	UI_CHILD(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
-	UI_CHILD(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
-	UI_CHILD(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
-#if 0
-			UI_CHILD(
-				UI_LIST(INHERIT_PARENT, INHERIT_PARENT, 1, ALIGN_MIDDLE, 3,
-					UI_CHILD(UI_BITMAP(8)),
-					UI_CHILD(UI_TEXT("__7 / 101")),
-					UI_CHILD(UI_BITMAP(4)),
+				UI_WRAPPER(INHERIT_PARENT, INHERIT_CHILD, 0,
+					UI_LIST(1, ALIGN_BEGIN, 4,
+						UI_CHILD(UI_BITMAP(0)),
+						UI_CHILD(UI_BITMAP(1)),
+						UI_CHILD(UI_BITMAP(2)),
+						UI_CHILD(UI_BITMAP(3)),
+					)
 				)
 			),
 			UI_CHILD(
-				UI_LIST(INHERIT_PARENT, INHERIT_PARENT, 1, ALIGN_END, 5,
-					UI_CHILD(UI_BITMAP(6)),
-					UI_CHILD(UI_BITMAP(7)),
-					UI_CHILD(UI_BITMAP(9)),
-					UI_CHILD(UI_BITMAP(10)),
-					UI_CHILD(UI_BITMAP(5)),
+				UI_WRAPPER(INHERIT_PARENT, INHERIT_CHILD, 0,
+					UI_LIST(1, ALIGN_MIDDLE, 3,
+						UI_CHILD(UI_BITMAP(8)),
+						UI_CHILD(UI_TEXT("__7 / 101")),
+						UI_CHILD(UI_BITMAP(4)),
+					)
 				)
 			),
-#endif
+			UI_CHILD(
+				UI_WRAPPER(INHERIT_PARENT, INHERIT_CHILD, 0,
+					UI_LIST(1, ALIGN_END, 5,
+						UI_CHILD(UI_BITMAP(6)),
+						UI_CHILD(UI_BITMAP(7)),
+						UI_CHILD(UI_BITMAP(9)),
+						UI_CHILD(UI_BITMAP(10)),
+						UI_CHILD(UI_BITMAP(5)),
+					)
+				)
+			),
 		)
 	),
-#if 0
 	UI_CHILD(
-		UI_LIST(INHERIT_PARENT, 140, 1, ALIGN_EVEN, 7,
-			UI_CHILD(UI_BOX(100, INHERIT_PARENT, 0, 0xeff4ff)),
-			UI_CHILD(UI_SLIDER(40, INHERIT_PARENT, 0, 0)),
-			UI_CHILD(
-				UI_LIST(INHERIT_CHILD, INHERIT_PARENT, 0, ALIGN_EVEN, 3,
-					UI_CHILD(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0)),
-					UI_CHILD(UI_TEXT("RGB 255 255 255")),
-					UI_CHILD(UI_TEXT("HSV 180 100 100")),
-				)
-			),
-			UI_CHILD(UI_BOX(100, INHERIT_PARENT, 0, 0xeff4ff)),
-			UI_CHILD(UI_SLIDER(40, INHERIT_PARENT, 0, 0)),
-			UI_CHILD(
-				UI_LIST(40, INHERIT_PARENT, 0, ALIGN_BEGIN, 3,
-					UI_CHILD(UI_BITMAP(13)),
-					UI_CHILD(UI_BITMAP(12)),
-					UI_CHILD(UI_BITMAP(11)),
-				)
-			),
-			UI_CHILD(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
+		UI_WRAPPER(INHERIT_PARENT, 140, 0,
+			UI_LIST(1, ALIGN_EVEN, 7,
+				UI_CHILD(UI_BOX(100, INHERIT_PARENT, 0, 0xeff4ff)),
+				UI_CHILD(
+					UI_WRAPPER(40, INHERIT_PARENT, 0,
+						UI_SLIDER(0, 0)
+					)
+				),
+				UI_CHILD(
+					UI_WRAPPER(INHERIT_CHILD, INHERIT_PARENT, 0,
+						UI_LIST(0, ALIGN_EVEN, 3,
+							UI_CHILD(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0)),
+							UI_CHILD(UI_TEXT("RGB 255 255 255")),
+							UI_CHILD(UI_TEXT("HSV 180 100 100")),
+						)
+					)
+				),
+				UI_CHILD(UI_BOX(100, INHERIT_PARENT, 0, 0xeff4ff)),
+				UI_CHILD(
+					UI_WRAPPER(40, INHERIT_PARENT, 0,
+						UI_SLIDER(0, 0)
+					)
+				),
+				UI_CHILD(
+					UI_WRAPPER(INHERIT_CHILD, INHERIT_PARENT, 0,
+						UI_LIST(0, ALIGN_BEGIN, 3,
+							UI_CHILD(UI_BITMAP(13)),
+							UI_CHILD(UI_BITMAP(12)),
+							UI_CHILD(UI_BITMAP(11)),
+						)
+					)
+				),
+				UI_CHILD(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
+			)
 		)
 	),
-#endif
-	UI_CHILD(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
 	UI_CHILD(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
 );
 
