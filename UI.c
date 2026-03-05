@@ -229,6 +229,42 @@ static void draw_rect(struct Rect r, uint32_t color)
 	}
 }
 
+static void draw_pixel_check(struct Rect r, struct Pair p, uint32_t color)
+{
+	if (!rect_hit(r, p)) {
+		return;
+	}
+
+	fb[p.y * H_RES + p.x] = color;
+}
+
+static void draw_circle(struct Rect vp, struct Pair c, int r, uint32_t color)
+{
+	int t1 = r / 16;
+	int x = r;
+	int y = 0;
+
+	while (x >= y) {
+		draw_pixel_check(vp, pair_new(c.x + x, c.y + y), color);
+		draw_pixel_check(vp, pair_new(c.x - x, c.y + y), color);
+		draw_pixel_check(vp, pair_new(c.x + x, c.y - y), color);
+		draw_pixel_check(vp, pair_new(c.x - x, c.y - y), color);
+		draw_pixel_check(vp, pair_new(c.x + y, c.y + x), color);
+		draw_pixel_check(vp, pair_new(c.x - y, c.y + x), color);
+		draw_pixel_check(vp, pair_new(c.x + y, c.y - x), color);
+		draw_pixel_check(vp, pair_new(c.x - y, c.y - x), color);
+
+		y++;
+		t1 += y;
+		int t2 = t1 - x;
+
+		if (t2 >= 0) {
+			t1 = t2;
+			x--;
+		}
+	}
+}
+
 struct BitmapData {
 	struct Pair bb;
 	uint8_t *data;
@@ -336,12 +372,12 @@ static void draw_text(struct Rect r, struct Rect s, uint32_t color, const char *
 #include "icon.h"
 
 enum EventType {
-	EV_CUSTOM,
 	EV_CURSOR_DOWN,
 	EV_CURSOR_MOVE,
 	EV_CURSOR_UP,
 	EV_ACTIVATE,
 	EV_DEACTIVATE,
+	EV_SLIDER_CHANGE_VALUE,
 };
 
 struct Event {
@@ -375,9 +411,10 @@ struct Base {
 
 	struct Base *next;
 	int ready;
+	int want_event;
 };
 
-static struct Base *listener_head;
+static struct Base *listener;
 static struct Rect dirty;
 
 struct Bitmap {
@@ -717,6 +754,16 @@ static void ui_layout(struct Base *base, struct Pair coord, struct Rect vp)
 		}
 
 		base->ready = 1;
+	}
+
+	if (base->want_event) {
+		if (listener == NULL) {
+			base->next = NULL;
+		} else {
+			base->next = listener;
+		}
+
+		listener = base;
 	}
 }
 
@@ -1096,6 +1143,55 @@ static struct Base *list_pick(struct Base *base, struct Rect pvp, struct Rect sv
 	return NULL;
 }
 
+struct Circle {
+	struct Base base;
+
+	int radius;
+	uint32_t color;
+};
+
+static int circle_get_width(struct Base *base)
+{
+	struct Circle *obj = (struct Circle *)base;
+
+	return obj->radius * 2;
+}
+
+static int circle_get_height(struct Base *base)
+{
+	struct Circle *obj = (struct Circle *)base;
+
+	return obj->radius * 2;
+}
+
+static void circle_layout(struct Base *base, struct Pair coord, struct Pair size)
+{
+}
+
+static void circle_render(struct Base *base, struct Rect pvp, struct Rect svp)
+{
+	struct Circle *obj = (struct Circle *)base;
+
+	svp = rect_intersect(svp, pvp);
+
+	draw_rect(svp, 0);
+	draw_circle(svp, pair_new((pvp.x1 + pvp.x2) / 2, (pvp.y1 + pvp.y2) / 2), obj->radius, obj->color);
+}
+
+static void ui_brush_size_process_event(struct Base *base, const struct Event *ev)
+{
+	struct Circle *obj = (struct Circle *)base;
+
+	switch (ev->type) {
+	case EV_SLIDER_CHANGE_VALUE:
+		obj->radius = 49 * ev->data_int / 100;
+		base->ready = 0;
+		break;
+	default:
+		break;
+	}
+}
+
 #define GROUP(...) { __VA_ARGS__ }
 
 #define UI_CHILD(child) { .base = (struct Base *)&child }
@@ -1191,11 +1287,13 @@ static struct Base *list_pick(struct Base *base, struct Rect pvp, struct Rect sv
 		.height = _height, \
 		.bc = { \
 			.padding = _padding, \
+			.h_align = ALIGN_MIDDLE, \
+			.v_align = ALIGN_MIDDLE, \
 			.content = { .base = (struct Base *)&_child }, \
 		}, \
 	}
 
-#define UI_SLIDER(_padding, _horizontal) \
+#define UI_SLIDER(_padding, _horizontal, ...) \
 	(struct Slider) { \
 		.base = { \
 			.layout = slider_layout, \
@@ -1213,6 +1311,20 @@ static struct Base *list_pick(struct Base *base, struct Rect pvp, struct Rect sv
 			.size = 16, \
 			.c = UI_CHILDREF(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff, .pick = dummy_pick)), \
 		}, \
+		__VA_ARGS__ \
+	}
+
+#define UI_CIRCLE(_radius, _color, ...) \
+	(struct Circle) { \
+		.base = { \
+			.get_width = circle_get_width, \
+			.get_height = circle_get_height, \
+			.layout = circle_layout, \
+			.render = circle_render, \
+			__VA_ARGS__ \
+		}, \
+		.radius = _radius, \
+		.color = _color, \
 	}
 
 struct List app = UI_LIST(0, ALIGN_BEGIN, 3,
@@ -1253,10 +1365,14 @@ struct List app = UI_LIST(0, ALIGN_BEGIN, 3,
 	UI_CHILD(
 		UI_WRAPPER(INHERIT_PARENT, 140, 0,
 			UI_LIST(1, ALIGN_BEGIN, 7,
-				UI_CHILD(UI_BOX(100, 100, 0, 0xeff4ff)),
+				UI_CHILD(
+					UI_WRAPPER(100, 100, 0,
+						UI_CIRCLE(10, 0xeff4ff, .process_event = ui_brush_size_process_event, .want_event = 1)
+					)
+				),
 				UI_CHILD(
 					UI_WRAPPER(40, INHERIT_PARENT, 0,
-						UI_SLIDER(0, 0)
+						UI_SLIDER(0, 0, .ev = { .type = EV_SLIDER_CHANGE_VALUE })
 					)
 				),
 				UI_CHILD(
@@ -1295,6 +1411,8 @@ static void render_app(struct Base *base)
 	struct Rect screen = rect_new(0, 0, H_RES - 1, V_RES - 1);
 
 	memset(&dirty, 0, sizeof(dirty));
+
+	listener = NULL;
 
 	/* They enlarge dirty region */
 	ui_layout(base, pair_new(0, 0), screen);
@@ -1423,7 +1541,7 @@ int main()
 				ev->next = NULL;
 
 				/* Call all listeners */
-				for (struct Base *b = listener_head; b; b = b->next) {
+				for (struct Base *b = listener; b; b = b->next) {
 					b->process_event(b, ev);
 				}
 
