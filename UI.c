@@ -1103,10 +1103,12 @@ static void list_layout(struct Base *base, struct Pair coord, struct Pair size)
 		} \
 	} while (0)
 
-	if (obj->horizontal) {
-		LIST_LAYOUT(get_width, size.w, x, width, x_offset);
-	} else {
-		LIST_LAYOUT(get_height, size.h, y, height, y_offset);
+	if (!base->ready) {
+		if (obj->horizontal) {
+			LIST_LAYOUT(get_width, size.w, x, width, x_offset);
+		} else {
+			LIST_LAYOUT(get_height, size.h, y, height, y_offset);
+		}
 	}
 
 	for (int i = 0; i < obj->children; i++) {
