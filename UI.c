@@ -90,11 +90,20 @@ struct Pair {
 
 static struct Pair pair_new(int x, int y)
 {
-	struct Pair point = {
+	struct Pair p = {
 		.x = x,
 		.y = y,
 	};
-	return point;
+	return p;
+}
+
+static struct Pair pair_move(struct Pair p1, struct Pair p2)
+{
+	struct Pair p = {
+		.x = p1.x + p2.x,
+		.y = p1.y + p2.y,
+	};
+	return p;
 }
 
 struct Rect {
@@ -111,6 +120,17 @@ static struct Rect rect_new(int sx1, int sy1, int sx2, int sy2)
 		.y1 = sy1,
 		.x2 = sx2,
 		.y2 = sy2,
+	};
+	return rect;
+}
+
+static struct Rect rect_new2(struct Pair coord, struct Pair size)
+{
+	struct Rect rect = {
+		.x1 = coord.x,
+		.y1 = coord.y,
+		.x2 = coord.x + size.w - 1,
+		.y2 = coord.y + size.h - 1,
 	};
 	return rect;
 }
@@ -133,6 +153,17 @@ static struct Rect rect_intersect(struct Rect s, struct Rect r)
 		.y1 = MAX(s.y1, r.y1),
 		.x2 = MIN(s.x2, r.x2),
 		.y2 = MIN(s.y2, r.y2),
+	};
+	return rect;
+}
+
+static struct Rect rect_union(struct Rect s, struct Rect r)
+{
+	struct Rect rect = {
+		.x1 = MIN(s.x1, r.x1),
+		.y1 = MIN(s.y1, r.y1),
+		.x2 = MAX(s.x2, r.x2),
+		.y2 = MAX(s.y2, r.y2),
 	};
 	return rect;
 }
@@ -163,9 +194,14 @@ static struct Pair rect_size(struct Rect r)
 	return pair_new(rect_width(r), rect_height(r));
 }
 
+static struct Pair rect_coord(struct Rect r)
+{
+	return pair_new(r.x1, r.y1);
+}
+
 static int rect_valid(struct Rect r)
 {
-	return r.x1 <= r.x2 && r.y1 <= r.y2;
+	return r.x1 < r.x2 && r.y1 < r.y2;
 }
 
 static int rect_hit(struct Rect r, struct Pair p)
@@ -300,6 +336,7 @@ static void draw_text(struct Rect r, struct Rect s, uint32_t color, const char *
 #include "icon.h"
 
 enum EventType {
+	EV_CUSTOM,
 	EV_CURSOR_DOWN,
 	EV_CURSOR_MOVE,
 	EV_CURSOR_UP,
@@ -310,8 +347,17 @@ enum EventType {
 struct Event {
 	enum EventType type;
 
-	struct Pair p;
+	union {
+		struct Pair p;
+		void *data_pointer;
+		int data_int;
+	};
+
+	struct Event *next;
 };
+
+static struct Event *head;
+static struct Event *tail;
 
 struct Base {
 	/* Parent may ask the element about its sizes */
@@ -319,14 +365,20 @@ struct Base {
 	int (*get_height)(struct Base *obj);
 
 	/* size - your box, layout there as you want */
-	void (*layout)(struct Base *obj, struct Pair size);
+	void (*layout)(struct Base *obj, struct Pair coord, struct Pair size);
 	/* pvp is just an element's vp in the screen coordinates,
 	 * svp - scissored pvp */
 	void (*render)(struct Base *obj, struct Rect pvp, struct Rect svp);
 
 	struct Base *(*pick)(struct Base *obj, struct Rect pvp, struct Rect svp, struct Pair p);
-	void (*process_event)(struct Base *obj, struct Event ev);
+	void (*process_event)(struct Base *obj, const struct Event *ev);
+
+	struct Base *next;
+	int ready;
 };
+
+static struct Base *listener_head;
+static struct Rect dirty;
 
 struct Bitmap {
 	struct BitmapClass *bc;
@@ -414,6 +466,8 @@ struct Slider {
 		int size;
 		struct ChildBox *c;
 	} knob, line;
+
+	struct Event ev;
 };
 
 static void child_box_render(struct ChildBox *c, struct Rect pvp, struct Rect svp)
@@ -454,7 +508,7 @@ static struct Base *child_box_pick(struct ChildBox *c, struct Rect pvp, struct R
 	return c->base->pick(c->base, vp, svp, p);
 }
 
-static void dummy_layout(struct Base *base, struct Pair size)
+static void dummy_layout(struct Base *base, struct Pair coord, struct Pair size)
 {
 }
 
@@ -518,7 +572,7 @@ static void box_content_layout(struct BoxContent *bc, struct Pair content_size, 
 	bc->content.vp = cp;
 }
 
-static void color_box_layout(struct Base *base, struct Pair size)
+static void color_box_layout(struct Base *base, struct Pair, struct Pair size)
 {
 	struct Box *obj = (struct Box *)base;
 
@@ -531,6 +585,8 @@ static void color_box_render(struct Base *base, struct Rect pvp, struct Rect svp
 	struct BoxContent *bc = &obj->bc;
 	struct Rect sv = rect_new(pvp.x1 + bc->padding, pvp.y1 + bc->padding, pvp.x2 - bc->padding, pvp.y2 - bc->padding);
 	struct Rect cv = rect_move(bc->content.vp, pair_new(pvp.x1, pvp.y1));
+
+	sv = rect_intersect(sv, svp);
 
 	draw_rect(rect_intersect(cv, sv), obj->bc.content.color);
 }
@@ -549,7 +605,7 @@ static int bitmap_get_height(struct Base *base)
 	return obj->bc.content.bitmap->bc->size.h + obj->bc.padding * 2;
 }
 
-static void bitmap_layout(struct Base *base, struct Pair size)
+static void bitmap_layout(struct Base *base, struct Pair coord, struct Pair size)
 {
 	struct PictureBitmap *obj = (struct PictureBitmap *)base;
 	struct Bitmap *b = obj->bc.content.bitmap;
@@ -586,17 +642,19 @@ static struct Base *bitmap_pick(struct Base *base, struct Rect pvp, struct Rect 
 	return NULL;
 }
 
-static void bitmap_process_event(struct Base *base, struct Event ev)
+static void bitmap_process_event(struct Base *base, const struct Event *ev)
 {
 	struct PictureBitmap *obj = (struct PictureBitmap *)base;
 
-	switch (ev.type) {
+	switch (ev->type) {
 	case EV_CURSOR_DOWN:
 	case EV_ACTIVATE:
 		obj->bg_color = 0x4caf50;
+		base->ready = 0;
 		break;
 	case EV_DEACTIVATE:
 		obj->bg_color = 0x01579b;
+		base->ready = 0;
 		break;
 	default:
 		break;
@@ -645,7 +703,24 @@ static int box_get_height(struct Base *base)
 	return obj->height;
 }
 
-static void box_layout(struct Base *base, struct Pair size)
+static void ui_layout(struct Base *base, struct Pair coord, struct Rect vp)
+{
+	struct Rect r = rect_move(vp, coord);
+
+	base->layout(base, rect_coord(r), rect_size(r));
+
+	if (!base->ready) {
+		if (!rect_valid(dirty)) {
+			dirty = r;
+		} else {
+			dirty = rect_union(dirty, r);
+		}
+
+		base->ready = 1;
+	}
+}
+
+static void box_layout(struct Base *base, struct Pair coord, struct Pair size)
 {
 	struct Box *obj = (struct Box *)base;
 	int w = box_get_width(base);
@@ -657,7 +732,7 @@ static void box_layout(struct Base *base, struct Pair size)
 		return;
 	}
 
-	obj->bc.content.base->layout(obj->bc.content.base, rect_size(obj->bc.content.vp));
+	ui_layout(obj->bc.content.base, coord, obj->bc.content.vp);
 }
 
 static void box_render(struct Base *base, struct Rect pvp, struct Rect svp)
@@ -704,7 +779,7 @@ static void render_text(struct Base *base, struct Rect w, struct Rect s)
 	draw_text(w, s, obj->color, obj->text);
 }
 
-static void slider_layout(struct Base *base, struct Pair size)
+static void slider_layout(struct Base *base, struct Pair coord, struct Pair size)
 {
 	struct Slider *obj = (struct Slider *)base;
 
@@ -730,7 +805,7 @@ static void slider_layout(struct Base *base, struct Pair size)
 		}
 
 		knob->vp = rect_new(x, y, x + w - 1, y + h - 1);
-		knob->base->layout(knob->base, rect_size(knob->vp));
+		ui_layout(knob->base, coord, knob->vp);
 	}
 
 	{
@@ -751,7 +826,7 @@ static void slider_layout(struct Base *base, struct Pair size)
 		}
 
 		line->vp = rect_move(rect_new(0, 0, w, h), pair_new(x, y));
-		line->base->layout(line->base, rect_size(line->vp));
+		ui_layout(line->base, coord, line->vp);
 	}
 }
 
@@ -774,23 +849,61 @@ static struct Base *slider_pick(struct Base *base, struct Rect pvp, struct Rect 
 	return NULL;
 }
 
-static void slider_process_event(struct Base *base, struct Event ev)
+static void ui_push_event(struct Event *ev)
+{
+	if (ev->next != NULL) {
+		return;
+	}
+
+	if (head == NULL) {
+		head = ev;
+		tail = ev;
+		return;
+	}
+
+	tail->next = ev;
+	tail = ev;
+}
+
+static void ui_remove_event(struct Event *ev)
+{
+	if (head == ev) {
+		head->next = ev->next;
+		ev->next = NULL;
+		return;
+	}
+
+	for (struct Event *i = head; i; i = i->next) {
+		if (i->next == ev) {
+			i->next = ev->next;
+			ev->next = NULL;
+			return;
+		}
+	}
+}
+
+static void ui_process_event(struct Base *base, struct Event *ev)
+{
+	base->process_event(base, ev);
+}
+
+static void slider_process_event(struct Base *base, const struct Event *ev)
 {
 	struct Slider *obj = (struct Slider *)base;
 	int diff;
 
-	switch (ev.type) {
+	switch (ev->type) {
 	case EV_CURSOR_DOWN:
-		obj->p = ev.p;
+		obj->p = ev->p;
 		obj->pressed = 1;
 		obj->old_value = obj->value;
 		break;
 	case EV_CURSOR_MOVE:
 		if (obj->pressed) {
 			if (obj->horizontal) {
-				diff = ev.p.x - obj->p.x;
+				diff = ev->p.x - obj->p.x;
 			} else {
-				diff = obj->p.y - ev.p.y;
+				diff = obj->p.y - ev->p.y;
 			}
 			obj->value = obj->old_value + (obj->knob.c->vp.x1 + diff) * 100 / obj->frac;
 
@@ -799,6 +912,11 @@ static void slider_process_event(struct Base *base, struct Event ev)
 			} else if (obj->value > 100) {
 				obj->value = 100;
 			}
+
+			obj->ev.data_int = obj->value;
+			ui_push_event(&obj->ev);
+
+			base->ready = 0;
 		}
 		break;
 	case EV_CURSOR_UP:
@@ -863,7 +981,7 @@ static int list_get_height(struct Base *base)
 	return h_max;
 }
 
-static void list_layout(struct Base *base, struct Pair size)
+static void list_layout(struct Base *base, struct Pair coord, struct Pair size)
 {
 	struct List *obj = (struct List *)base;
 
@@ -947,7 +1065,7 @@ static void list_layout(struct Base *base, struct Pair size)
 	for (int i = 0; i < obj->children; i++) {
 		struct ChildBox *c = &obj->child[i];
 
-		c->base->layout(c->base, rect_size(c->vp));
+		ui_layout(c->base, coord, c->vp);
 	}
 }
 
@@ -1172,12 +1290,23 @@ struct List app = UI_LIST(0, ALIGN_BEGIN, 3,
 	UI_CHILD(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
 );
 
-static void render_app(struct Base *base, struct Rect w)
+static void render_app(struct Base *base)
 {
-	draw_rect(w, 0x01579b);
+	struct Rect screen = rect_new(0, 0, H_RES - 1, V_RES - 1);
 
-	base->layout(base, rect_size(w));
-	base->render(base, w, w);
+	memset(&dirty, 0, sizeof(dirty));
+
+	/* They enlarge dirty region */
+	ui_layout(base, pair_new(0, 0), screen);
+
+	dirty = rect_intersect(dirty, screen);
+	if (!rect_valid(dirty)) {
+		return;
+	}
+
+	draw_rect(dirty, 0x01579b);
+
+	base->render(base, screen, dirty);
 }
 
 #ifndef FPGA
@@ -1224,7 +1353,6 @@ int main()
 			case SDL_WINDOWEVENT:
 				switch (e.window.event) {
 				case SDL_WINDOWEVENT_EXPOSED:
-					render_app((struct Base *)&app, rect_new(0, 0, H_RES - 1, V_RES - 1));
 					break;
 				}
 				break;
@@ -1232,20 +1360,29 @@ int main()
 				new_pick = app.base.pick(&app.base, rect_new(0, 0, H_RES - 1, V_RES - 1), rect_new(0, 0, H_RES - 1, V_RES - 1), pair_new(e.button.x, e.button.y));
 
 				if (picked && picked != new_pick) {
-					picked->process_event(picked, (struct Event) { EV_DEACTIVATE });
+					struct Event ev = {
+						.type = EV_DEACTIVATE,
+					};
+					ui_process_event(picked, &ev);
 				}
 				picked = new_pick;
 
 				if (picked) {
-					picked->process_event(picked, (struct Event) { EV_CURSOR_DOWN, pair_new(e.button.x, e.button.y) });
-					render_app((struct Base *)&app, rect_new(0, 0, H_RES - 1, V_RES - 1));
+					struct Event ev = {
+						.type = EV_CURSOR_DOWN,
+						.p = pair_new(e.button.x, e.button.y),
+					};
+					ui_process_event(picked, &ev);
 				}
 
 				break;
 			case SDL_MOUSEMOTION:
 				if (picked) {
-					picked->process_event(picked, (struct Event) { EV_CURSOR_MOVE, pair_new(e.motion.x, e.motion.y) });
-					render_app((struct Base *)&app, rect_new(0, 0, H_RES - 1, V_RES - 1));
+					struct Event ev = {
+						.type = EV_CURSOR_MOVE,
+						.p = pair_new(e.motion.x, e.motion.y),
+					};
+					ui_process_event(picked, &ev);
 				}
 				break;
 			case SDL_MOUSEBUTTONUP:
@@ -1255,18 +1392,45 @@ int main()
 					break;
 				}
 
-				picked->process_event(picked, (struct Event) { EV_CURSOR_UP, pair_new(e.button.x, e.button.y) });
+				{
+					struct Event ev = {
+						.type = EV_CURSOR_UP,
+						.p = pair_new(e.button.x, e.button.y),
+					};
+					ui_process_event(picked, &ev);
+				}
 
 				if (picked == new_pick) {
-					picked->process_event(picked, (struct Event) { EV_ACTIVATE });
+					struct Event ev = {
+						.type = EV_ACTIVATE,
+					};
+					ui_process_event(picked, &ev);
 				} else {
-					picked->process_event(picked, (struct Event) { EV_DEACTIVATE });
+					struct Event ev = {
+						.type = EV_DEACTIVATE,
+					};
+					ui_process_event(picked, &ev);
 					picked = NULL;
 				}
 
-				render_app((struct Base *)&app, rect_new(0, 0, H_RES - 1, V_RES - 1));
 				break;
 			}
+
+			while (head != NULL) {
+				struct Event *ev = head;
+
+				head = ev->next;
+				ev->next = NULL;
+
+				/* Call all listeners */
+				for (struct Base *b = listener_head; b; b = b->next) {
+					b->process_event(b, ev);
+				}
+
+				/* Do your business logic here */
+			}
+
+			render_app((struct Base *)&app);
 		}
 
 		SDL_UpdateTexture(sdl_texture, NULL, fb, H_RES * 4);
