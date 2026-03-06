@@ -378,6 +378,10 @@ enum EventType {
 	EV_ACTIVATE,
 	EV_DEACTIVATE,
 	EV_SLIDER_CHANGE_VALUE,
+	EV_SLIDER_SUBMIT_VALUE,
+	EV_EXPANDER_OPEN,
+	EV_EXPANDER_CLOSE,
+	EV_LIST_ELEMENT_CHANGED,
 };
 
 struct Event {
@@ -461,12 +465,27 @@ struct Box {
 	struct BoxContent bc;
 };
 
+struct BoxExpander {
+	struct Box box;
+
+	int height;
+
+	struct Event ev;
+};
+
+enum UIButtonType {
+	UI_BUTTON_NORMAL,
+	UI_BUTTON_SWITCH,
+};
+
 struct PictureBitmap {
 	struct Base base;
 
+	enum UIButtonType type;
 	uint32_t bg_color;
 
 	struct BoxContent bc;
+	struct Event ev;
 };
 
 struct Text {
@@ -506,6 +525,44 @@ struct Slider {
 
 	struct Event ev;
 };
+
+static void ui_push_event(struct Event *ev)
+{
+	if (ev->next != NULL) {
+		return;
+	}
+
+	if (head == NULL) {
+		head = ev;
+		tail = ev;
+		return;
+	}
+
+	tail->next = ev;
+	tail = ev;
+}
+
+static void ui_remove_event(struct Event *ev)
+{
+	if (head == ev) {
+		head->next = ev->next;
+		ev->next = NULL;
+		return;
+	}
+
+	for (struct Event *i = head; i; i = i->next) {
+		if (i->next == ev) {
+			i->next = ev->next;
+			ev->next = NULL;
+			return;
+		}
+	}
+}
+
+static void ui_process_event(struct Base *base, struct Event *ev)
+{
+	base->process_event(base, ev);
+}
 
 static void child_box_render(struct ChildBox *c, struct Rect pvp, struct Rect svp)
 {
@@ -568,7 +625,7 @@ static int color_box_get_height(struct Base *base)
 {
 	struct Box *obj = (struct Box *)base;
 
-	return obj->width;
+	return obj->height;
 }
 
 static void box_content_layout(struct BoxContent *bc, struct Pair content_size, struct Pair layout_size)
@@ -687,10 +744,18 @@ static void bitmap_process_event(struct Base *base, const struct Event *ev)
 	case EV_CURSOR_DOWN:
 	case EV_ACTIVATE:
 		obj->bg_color = 0x4caf50;
+
+		obj->ev.type = EV_EXPANDER_OPEN;
+		ui_push_event(&obj->ev);
+
 		base->ready = 0;
 		break;
 	case EV_DEACTIVATE:
 		obj->bg_color = 0x01579b;
+
+		obj->ev.type = EV_EXPANDER_CLOSE;
+		ui_push_event(&obj->ev);
+
 		base->ready = 0;
 		break;
 	default:
@@ -896,48 +961,11 @@ static struct Base *slider_pick(struct Base *base, struct Rect pvp, struct Rect 
 	return NULL;
 }
 
-static void ui_push_event(struct Event *ev)
-{
-	if (ev->next != NULL) {
-		return;
-	}
-
-	if (head == NULL) {
-		head = ev;
-		tail = ev;
-		return;
-	}
-
-	tail->next = ev;
-	tail = ev;
-}
-
-static void ui_remove_event(struct Event *ev)
-{
-	if (head == ev) {
-		head->next = ev->next;
-		ev->next = NULL;
-		return;
-	}
-
-	for (struct Event *i = head; i; i = i->next) {
-		if (i->next == ev) {
-			i->next = ev->next;
-			ev->next = NULL;
-			return;
-		}
-	}
-}
-
-static void ui_process_event(struct Base *base, struct Event *ev)
-{
-	base->process_event(base, ev);
-}
-
 static void slider_process_event(struct Base *base, const struct Event *ev)
 {
 	struct Slider *obj = (struct Slider *)base;
 	int diff;
+	int value;
 
 	switch (ev->type) {
 	case EV_CURSOR_DOWN:
@@ -952,19 +980,21 @@ static void slider_process_event(struct Base *base, const struct Event *ev)
 			} else {
 				diff = obj->p.y - ev->p.y;
 			}
-			obj->value = obj->old_value + (obj->knob.c->vp.x1 + diff) * 100 / obj->frac;
+			value = obj->old_value + (obj->knob.c->vp.x1 + diff) * 100 / obj->frac;
 
-			if (obj->value < 0) {
-				obj->value = 0;
-			} else if (obj->value > 100) {
-				obj->value = 100;
+			if (value < 0) {
+				value = 0;
+			} else if (value > 100) {
+				value = 100;
 			}
 
-			obj->ev.data_int = obj->value;
+			obj->ev.data_int = value;
 			ui_push_event(&obj->ev);
-
-			base->ready = 0;
 		}
+		break;
+	case EV_SLIDER_SUBMIT_VALUE:
+		obj->value = ev->data_int;
+		base->ready = 0;
 		break;
 	case EV_CURSOR_UP:
 		obj->pressed = 0;
@@ -1145,11 +1175,24 @@ static struct Base *list_pick(struct Base *base, struct Rect pvp, struct Rect sv
 	return NULL;
 }
 
+static void list_process_event(struct Base *base, const struct Event *ev)
+{
+	switch (ev->type) {
+	case EV_LIST_ELEMENT_CHANGED:
+		base->ready = 0;
+		break;
+	default:
+		break;
+	}
+}
+
 struct Circle {
 	struct Base base;
 
 	int radius;
 	uint32_t color;
+
+	struct Event ev;
 };
 
 static int circle_get_width(struct Base *base)
@@ -1183,18 +1226,49 @@ static void circle_render(struct Base *base, struct Rect pvp, struct Rect svp)
 static void ui_brush_size_process_event(struct Base *base, const struct Event *ev)
 {
 	struct Circle *obj = (struct Circle *)base;
+	int value;
 
 	switch (ev->type) {
 	case EV_SLIDER_CHANGE_VALUE:
-		obj->radius = 49 * ev->data_int / 100;
-		base->ready = 0;
+		value = 16 * ev->data_int / 100;
+
+		if (value != obj->radius) {
+			obj->radius = value;
+
+			obj->ev.data_int = ev->data_int;
+			ui_push_event(&obj->ev);
+
+			base->ready = 0;
+		}
 		break;
 	default:
 		break;
 	}
 }
 
-#define GROUP(...) { __VA_ARGS__ }
+static void expander_process_event(struct Base *base, const struct Event *ev)
+{
+	struct BoxExpander *obj = (struct BoxExpander *)base;
+
+	switch (ev->type) {
+	case EV_EXPANDER_OPEN:
+		obj->box.height = obj->height;
+
+		ui_push_event(&obj->ev);
+
+		base->ready = 0;
+		break;
+	case EV_EXPANDER_CLOSE:
+		obj->box.height = 0;
+
+		ui_push_event(&obj->ev);
+
+		base->ready = 0;
+		break;
+	default:
+		break;
+	}
+}
 
 #define UI_CHILD(child) { .base = (struct Base *)&child }
 #define UI_CHILDREF(child) &(struct ChildBox) { .base = (struct Base *)&child }
@@ -1207,6 +1281,8 @@ static void ui_brush_size_process_event(struct Base *base, const struct Event *e
 			.layout = list_layout, \
 			.render = list_render, \
 			.pick = list_pick, \
+			.process_event = list_process_event, \
+			.want_event = 1, \
 		}, \
 		.horizontal = _horizontal, \
 		.align = _align, \
@@ -1217,7 +1293,7 @@ static void ui_brush_size_process_event(struct Base *base, const struct Event *e
 		}, \
 	}
 
-#define UI_BITMAP(_index) \
+#define UI_BITMAP(_index, _type) \
 	(struct PictureBitmap) { \
 		.base = { \
 			.get_width = bitmap_get_width, \
@@ -1227,6 +1303,7 @@ static void ui_brush_size_process_event(struct Base *base, const struct Event *e
 			.pick = bitmap_pick, \
 			.process_event = bitmap_process_event, \
 		}, \
+		.type = _type, \
 		.bg_color = 0x01579b, \
 		.bc = { \
 			.padding = 2, \
@@ -1289,10 +1366,31 @@ static void ui_brush_size_process_event(struct Base *base, const struct Event *e
 		.height = _height, \
 		.bc = { \
 			.padding = _padding, \
-			.h_align = ALIGN_MIDDLE, \
-			.v_align = ALIGN_MIDDLE, \
 			.content = { .base = (struct Base *)&_child }, \
 		}, \
+	}
+
+#define UI_WRAPPER_EXPANDER(_width, _height, _padding, _child) \
+	(struct BoxExpander) { \
+		.box = { \
+			.base = { \
+				.get_width = box_get_width, \
+				.get_height = box_get_height, \
+				.layout = box_layout, \
+				.render = box_render, \
+				.pick = box_pick, \
+				.process_event = expander_process_event, \
+				.want_event = 1, \
+			}, \
+			.width = _width, \
+			.height = _height, \
+			.bc = { \
+				.padding = _padding, \
+				.content = { .base = (struct Base *)&_child }, \
+			}, \
+		}, \
+		.height = 140, \
+		.ev = { .type = EV_LIST_ELEMENT_CHANGED }, \
 	}
 
 #define UI_SLIDER(_padding, _horizontal, ...) \
@@ -1302,6 +1400,7 @@ static void ui_brush_size_process_event(struct Base *base, const struct Event *e
 			.render = slider_render, \
 			.pick = slider_pick, \
 			.process_event = slider_process_event, \
+			.want_event = 1, \
 		}, \
 		.horizontal = _horizontal, \
 		.value = 0, \
@@ -1327,84 +1426,83 @@ static void ui_brush_size_process_event(struct Base *base, const struct Event *e
 		}, \
 		.radius = _radius, \
 		.color = _color, \
+		.ev = { .type = EV_SLIDER_SUBMIT_VALUE }, \
 	}
 
-struct List app = UI_LIST(0, ALIGN_BEGIN, 3,
+static struct List top_panel = UI_LIST(1, ALIGN_BEGIN, 3,
 	UI_CHILD(
-		UI_LIST(1, ALIGN_BEGIN, 3,
-			UI_CHILD(
-				UI_WRAPPER(INHERIT_PARENT, INHERIT_CHILD, 0,
-					UI_LIST(1, ALIGN_BEGIN, 4,
-						UI_CHILD(UI_BITMAP(0)),
-						UI_CHILD(UI_BITMAP(1)),
-						UI_CHILD(UI_BITMAP(2)),
-						UI_CHILD(UI_BITMAP(3)),
-					)
-				)
-			),
-			UI_CHILD(
-				UI_WRAPPER(INHERIT_PARENT, INHERIT_CHILD, 0,
-					UI_LIST(1, ALIGN_MIDDLE, 3,
-						UI_CHILD(UI_BITMAP(8)),
-						UI_CHILD(UI_TEXT("__7 / 101")),
-						UI_CHILD(UI_BITMAP(4)),
-					)
-				)
-			),
-			UI_CHILD(
-				UI_WRAPPER(INHERIT_PARENT, INHERIT_CHILD, 0,
-					UI_LIST(1, ALIGN_END, 5,
-						UI_CHILD(UI_BITMAP(6)),
-						UI_CHILD(UI_BITMAP(7)),
-						UI_CHILD(UI_BITMAP(9)),
-						UI_CHILD(UI_BITMAP(10)),
-						UI_CHILD(UI_BITMAP(5)),
-					)
-				)
-			),
-		)
-	),
-	UI_CHILD(
-		UI_WRAPPER(INHERIT_PARENT, 140, 0,
-			UI_LIST(1, ALIGN_BEGIN, 7,
-				UI_CHILD(
-					UI_WRAPPER(100, 100, 0,
-						UI_CIRCLE(10, 0xeff4ff, .process_event = ui_brush_size_process_event, .want_event = 1)
-					)
-				),
-				UI_CHILD(
-					UI_WRAPPER(40, INHERIT_PARENT, 0,
-						UI_SLIDER(0, 0, .ev = { .type = EV_SLIDER_CHANGE_VALUE })
-					)
-				),
-				UI_CHILD(
-					UI_WRAPPER(INHERIT_CHILD, INHERIT_PARENT, 0,
-						UI_LIST(0, ALIGN_BEGIN, 3,
-							UI_CHILD(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0)),
-							UI_CHILD(UI_TEXT("RGB 255 255 255")),
-							UI_CHILD(UI_TEXT("HSV 180 100 100")),
-						)
-					)
-				),
-				UI_CHILD(UI_BOX(100, 100, 0, 0xeff4ff)),
-				UI_CHILD(
-					UI_WRAPPER(40, INHERIT_PARENT, 0,
-						UI_SLIDER(0, 0)
-					)
-				),
-				UI_CHILD(
-					UI_WRAPPER(INHERIT_CHILD, INHERIT_PARENT, 0,
-						UI_LIST(0, ALIGN_BEGIN, 3,
-							UI_CHILD(UI_BITMAP(13)),
-							UI_CHILD(UI_BITMAP(12)),
-							UI_CHILD(UI_BITMAP(11)),
-						)
-					)
-				),
-				UI_CHILD(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
+		UI_WRAPPER(INHERIT_PARENT, INHERIT_CHILD, 0,
+			UI_LIST(1, ALIGN_BEGIN, 4,
+				UI_CHILD(UI_BITMAP(0, UI_BUTTON_NORMAL)),
+				UI_CHILD(UI_BITMAP(1, UI_BUTTON_NORMAL)),
+				UI_CHILD(UI_BITMAP(2, UI_BUTTON_NORMAL)),
+				UI_CHILD(UI_BITMAP(3, UI_BUTTON_SWITCH)),
 			)
 		)
 	),
+	UI_CHILD(
+		UI_WRAPPER(INHERIT_PARENT, INHERIT_CHILD, 0,
+			UI_LIST(1, ALIGN_MIDDLE, 3,
+				UI_CHILD(UI_BITMAP(8, UI_BUTTON_NORMAL)),
+				UI_CHILD(UI_TEXT("__7 / 101")),
+				UI_CHILD(UI_BITMAP(4, UI_BUTTON_NORMAL)),
+			)
+		)
+	),
+	UI_CHILD(
+		UI_WRAPPER(INHERIT_PARENT, INHERIT_CHILD, 0,
+			UI_LIST(1, ALIGN_END, 5,
+				UI_CHILD(UI_BITMAP(6, UI_BUTTON_NORMAL)),
+				UI_CHILD(UI_BITMAP(7, UI_BUTTON_NORMAL)),
+				UI_CHILD(UI_BITMAP(9, UI_BUTTON_NORMAL)),
+				UI_CHILD(UI_BITMAP(10, UI_BUTTON_NORMAL)),
+				UI_CHILD(UI_BITMAP(5, UI_BUTTON_SWITCH)),
+			)
+		)
+	),
+);
+
+static struct List settings = UI_LIST(1, ALIGN_BEGIN, 7,
+	UI_CHILD(
+		UI_WRAPPER(INHERIT_PARENT, INHERIT_PARENT, 0,
+			UI_CIRCLE(10, 0xeff4ff, .process_event = ui_brush_size_process_event, .want_event = 1)
+		)
+	),
+	UI_CHILD(
+		UI_WRAPPER(40, INHERIT_PARENT, 0,
+			UI_SLIDER(0, 0, .ev = { .type = EV_SLIDER_CHANGE_VALUE })
+		)
+	),
+	UI_CHILD(
+		UI_WRAPPER(INHERIT_CHILD, INHERIT_PARENT, 0,
+			UI_LIST(0, ALIGN_BEGIN, 3,
+				UI_CHILD(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0)),
+				UI_CHILD(UI_TEXT("RGB 255 255 255")),
+				UI_CHILD(UI_TEXT("HSV 180 100 100")),
+			)
+		)
+	),
+	UI_CHILD(UI_BOX(100, 100, 0, 0xeff4ff)),
+	UI_CHILD(
+		UI_WRAPPER(40, INHERIT_PARENT, 0,
+			UI_SLIDER(0, 0)
+		)
+	),
+	UI_CHILD(
+		UI_WRAPPER(INHERIT_CHILD, INHERIT_PARENT, 0,
+			UI_LIST(0, ALIGN_MIDDLE, 3,
+				UI_CHILD(UI_BITMAP(13, UI_BUTTON_NORMAL)),
+				UI_CHILD(UI_BITMAP(12, UI_BUTTON_NORMAL)),
+				UI_CHILD(UI_BITMAP(11, UI_BUTTON_NORMAL)),
+			)
+		)
+	),
+	UI_CHILD(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
+);
+
+struct List app = UI_LIST(0, ALIGN_BEGIN, 3,
+	UI_CHILD(top_panel),
+	UI_CHILD(UI_WRAPPER_EXPANDER(INHERIT_PARENT, 0, 0, settings)),
 	UI_CHILD(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
 );
 
