@@ -372,25 +372,43 @@ static void draw_text(struct Rect r, struct Rect s, uint32_t color, const char *
 #include "icon.h"
 
 enum EventType {
+	EV_NONE,
+
 	EV_CURSOR_DOWN,
 	EV_CURSOR_MOVE,
+	EV_CURSOR_ENTER,
+	EV_CURSOR_EXIT,
 	EV_CURSOR_UP,
-	EV_ACTIVATE,
+	EV_CURSOR_CLICK,
+	EV_CANCEL,
 	EV_DEACTIVATE,
+
 	EV_SLIDER_CHANGE_VALUE,
 	EV_SLIDER_SUBMIT_VALUE,
+
 	EV_EXPANDER_OPEN,
 	EV_EXPANDER_CLOSE,
+
 	EV_LIST_ELEMENT_CHANGED,
+
+	EV_BUTTON_STICK_DISABLE,
+	EV_BRUSH_CHANGE,
+};
+
+struct ButtonStickEvent {
+	const void *group;
 };
 
 struct Event {
 	enum EventType type;
 
+	struct Base *origin;
+
 	union {
 		struct Pair p;
 		void *data_pointer;
 		int data_int;
+		const void *group;
 	};
 
 	struct Event *next;
@@ -414,7 +432,7 @@ struct Base {
 	void (*process_event)(struct Base *obj, const struct Event *ev);
 
 	struct Base *next;
-	int ready;
+	int valid;
 	int want_event;
 };
 
@@ -476,6 +494,7 @@ struct BoxExpander {
 enum UIButtonType {
 	UI_BUTTON_NORMAL,
 	UI_BUTTON_SWITCH,
+	UI_BUTTON_STICK,
 };
 
 struct PictureBitmap {
@@ -486,6 +505,13 @@ struct PictureBitmap {
 
 	struct BoxContent bc;
 	struct Event ev;
+	struct Event ev2;
+
+	int activated;
+
+	const void *group;
+	enum EventType action1;
+	enum EventType action2;
 };
 
 struct Text {
@@ -562,6 +588,38 @@ static void ui_remove_event(struct Event *ev)
 static void ui_process_event(struct Base *base, struct Event *ev)
 {
 	base->process_event(base, ev);
+}
+
+static void ui_layout(struct Base *base, struct Pair coord, struct Rect vp)
+{
+	struct Rect r = rect_move(vp, coord);
+
+	base->layout(base, rect_coord(r), rect_size(r));
+
+	if (!base->valid) {
+		if (!rect_valid(dirty)) {
+			dirty = r;
+		} else {
+			dirty = rect_union(dirty, r);
+		}
+
+		base->valid = 1;
+	}
+
+	if (base->want_event) {
+		if (listener == NULL) {
+			base->next = NULL;
+		} else {
+			base->next = listener;
+		}
+
+		listener = base;
+	}
+}
+
+static void ui_invalidate(struct Base *base)
+{
+	base->valid = 0;
 }
 
 static void child_box_render(struct ChildBox *c, struct Rect pvp, struct Rect svp)
@@ -742,21 +800,67 @@ static void bitmap_process_event(struct Base *base, const struct Event *ev)
 
 	switch (ev->type) {
 	case EV_CURSOR_DOWN:
-	case EV_ACTIVATE:
+		if (obj->activated) {
+			break;
+		}
+
 		obj->bg_color = 0x4caf50;
 
-		obj->ev.type = EV_EXPANDER_OPEN;
-		ui_push_event(&obj->ev);
-
-		base->ready = 0;
+		ui_invalidate(base);
 		break;
-	case EV_DEACTIVATE:
+	case EV_CURSOR_CLICK:
+		switch (obj->type) {
+		case UI_BUTTON_NORMAL:
+			obj->bg_color = 0x01579b;
+
+			ui_invalidate(base);
+
+			obj->ev.type = obj->action1;
+			ui_push_event(&obj->ev);
+			break;
+		case UI_BUTTON_SWITCH:
+			if (obj->activated) {
+				obj->bg_color = 0x01579b;
+				obj->activated = 0;
+
+				ui_invalidate(base);
+
+				obj->ev.type = obj->action2;
+				ui_push_event(&obj->ev);
+			} else {
+				obj->activated = 1;
+
+				obj->ev.type = obj->action1;
+				ui_push_event(&obj->ev);
+			}
+			break;
+		case UI_BUTTON_STICK:
+			obj->ev2.type = EV_BUTTON_STICK_DISABLE;
+			obj->ev2.origin = base;
+			obj->ev2.group = obj->group;
+			ui_push_event(&obj->ev2);
+
+			obj->ev.type = obj->action1;
+			obj->ev.group = obj->group;
+			ui_push_event(&obj->ev);
+			break;
+		}
+		break;
+	case EV_BUTTON_STICK_DISABLE:
+		if (ev->group != obj->group || ev->origin == base) {
+			break;
+		}
+
 		obj->bg_color = 0x01579b;
 
-		obj->ev.type = EV_EXPANDER_CLOSE;
-		ui_push_event(&obj->ev);
+		ui_invalidate(base);
+		break;
+	case EV_CANCEL:
+		if (obj->type == UI_BUTTON_NORMAL || !obj->activated) {
+			obj->bg_color = 0x01579b;
 
-		base->ready = 0;
+			ui_invalidate(base);
+		}
 		break;
 	default:
 		break;
@@ -803,33 +907,6 @@ static int box_get_height(struct Base *base)
 	}
 
 	return obj->height;
-}
-
-static void ui_layout(struct Base *base, struct Pair coord, struct Rect vp)
-{
-	struct Rect r = rect_move(vp, coord);
-
-	base->layout(base, rect_coord(r), rect_size(r));
-
-	if (!base->ready) {
-		if (!rect_valid(dirty)) {
-			dirty = r;
-		} else {
-			dirty = rect_union(dirty, r);
-		}
-
-		base->ready = 1;
-	}
-
-	if (base->want_event) {
-		if (listener == NULL) {
-			base->next = NULL;
-		} else {
-			base->next = listener;
-		}
-
-		listener = base;
-	}
 }
 
 static void box_layout(struct Base *base, struct Pair coord, struct Pair size)
@@ -994,7 +1071,7 @@ static void slider_process_event(struct Base *base, const struct Event *ev)
 		break;
 	case EV_SLIDER_SUBMIT_VALUE:
 		obj->value = ev->data_int;
-		base->ready = 0;
+		ui_invalidate(base);
 		break;
 	case EV_CURSOR_UP:
 		obj->pressed = 0;
@@ -1133,7 +1210,7 @@ static void list_layout(struct Base *base, struct Pair coord, struct Pair size)
 		} \
 	} while (0)
 
-	if (!base->ready) {
+	if (!base->valid) {
 		if (obj->horizontal) {
 			LIST_LAYOUT(get_width, size.w, x, width, x_offset);
 		} else {
@@ -1179,7 +1256,7 @@ static void list_process_event(struct Base *base, const struct Event *ev)
 {
 	switch (ev->type) {
 	case EV_LIST_ELEMENT_CHANGED:
-		base->ready = 0;
+		ui_invalidate(base);
 		break;
 	default:
 		break;
@@ -1238,7 +1315,7 @@ static void ui_brush_size_process_event(struct Base *base, const struct Event *e
 			obj->ev.data_int = ev->data_int;
 			ui_push_event(&obj->ev);
 
-			base->ready = 0;
+			ui_invalidate(base);
 		}
 		break;
 	default:
@@ -1256,14 +1333,14 @@ static void expander_process_event(struct Base *base, const struct Event *ev)
 
 		ui_push_event(&obj->ev);
 
-		base->ready = 0;
+		ui_invalidate(base);
 		break;
 	case EV_EXPANDER_CLOSE:
 		obj->box.height = 0;
 
 		ui_push_event(&obj->ev);
 
-		base->ready = 0;
+		ui_invalidate(base);
 		break;
 	default:
 		break;
@@ -1293,7 +1370,7 @@ static void expander_process_event(struct Base *base, const struct Event *ev)
 		}, \
 	}
 
-#define UI_BITMAP(_index, _type) \
+#define UI_BITMAP(_index, _type, ...) \
 	(struct PictureBitmap) { \
 		.base = { \
 			.get_width = bitmap_get_width, \
@@ -1302,6 +1379,7 @@ static void expander_process_event(struct Base *base, const struct Event *ev)
 			.render = bitmap_render, \
 			.pick = bitmap_pick, \
 			.process_event = bitmap_process_event, \
+			.want_event = 1, \
 		}, \
 		.type = _type, \
 		.bg_color = 0x01579b, \
@@ -1317,6 +1395,7 @@ static void expander_process_event(struct Base *base, const struct Event *ev)
 				}, \
 			}, \
 		}, \
+		__VA_ARGS__ \
 	}
 
 #define UI_TEXT(_text) \
@@ -1429,14 +1508,16 @@ static void expander_process_event(struct Base *base, const struct Event *ev)
 		.ev = { .type = EV_SLIDER_SUBMIT_VALUE }, \
 	}
 
+static const char brush_group;
+
 static struct List top_panel = UI_LIST(1, ALIGN_BEGIN, 3,
 	UI_CHILD(
 		UI_WRAPPER(INHERIT_PARENT, INHERIT_CHILD, 0,
 			UI_LIST(1, ALIGN_BEGIN, 4,
-				UI_CHILD(UI_BITMAP(0, UI_BUTTON_NORMAL)),
-				UI_CHILD(UI_BITMAP(1, UI_BUTTON_NORMAL)),
-				UI_CHILD(UI_BITMAP(2, UI_BUTTON_NORMAL)),
-				UI_CHILD(UI_BITMAP(3, UI_BUTTON_SWITCH)),
+				UI_CHILD(UI_BITMAP(0, UI_BUTTON_STICK, .group = &brush_group, .action1 = EV_BRUSH_CHANGE)),
+				UI_CHILD(UI_BITMAP(1, UI_BUTTON_STICK, .group = &brush_group, .action1 = EV_BRUSH_CHANGE)),
+				UI_CHILD(UI_BITMAP(2, UI_BUTTON_STICK, .group = &brush_group, .action1 = EV_BRUSH_CHANGE)),
+				UI_CHILD(UI_BITMAP(3, UI_BUTTON_SWITCH, .action1 = EV_EXPANDER_OPEN, .action2 = EV_EXPANDER_CLOSE)),
 			)
 		)
 	),
@@ -1604,8 +1685,6 @@ int main()
 				}
 				break;
 			case SDL_MOUSEBUTTONUP:
-				new_pick = app.base.pick(&app.base, rect_new(0, 0, H_RES - 1, V_RES - 1), rect_new(0, 0, H_RES - 1, V_RES - 1), pair_new(e.button.x, e.button.y));
-
 				if (picked == NULL) {
 					break;
 				}
@@ -1618,14 +1697,16 @@ int main()
 					ui_process_event(picked, &ev);
 				}
 
+				new_pick = app.base.pick(&app.base, rect_new(0, 0, H_RES - 1, V_RES - 1), rect_new(0, 0, H_RES - 1, V_RES - 1), pair_new(e.button.x, e.button.y));
+
 				if (picked == new_pick) {
 					struct Event ev = {
-						.type = EV_ACTIVATE,
+						.type = EV_CURSOR_CLICK,
 					};
 					ui_process_event(picked, &ev);
 				} else {
 					struct Event ev = {
-						.type = EV_DEACTIVATE,
+						.type = EV_CANCEL,
 					};
 					ui_process_event(picked, &ev);
 					picked = NULL;
