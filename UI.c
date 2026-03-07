@@ -395,10 +395,6 @@ enum EventType {
 	EV_BRUSH_CHANGE,
 };
 
-struct ButtonStickEvent {
-	const void *group;
-};
-
 struct Event {
 	enum EventType type;
 
@@ -486,6 +482,7 @@ struct Box {
 struct BoxExpander {
 	struct Box box;
 
+	int width;
 	int height;
 
 	struct Event ev;
@@ -1149,19 +1146,26 @@ static void list_layout(struct Base *base, struct Pair coord, struct Pair size)
 		int iwos = 0; \
 		int width = size.x; \
 		int height = size.y; \
+		int children = 0; \
 \
 		for (int i = 0; i < obj->children; i++) { \
 			struct ChildBox *c = &obj->child[i]; \
 			int cs = c->base->_method(c->base); \
 \
-			if (cs >= 0) { \
+			if (cs == 0) { \
+				continue; \
+			} \
+\
+			children++; \
+\
+			if (cs > 0) { \
 				total_size += cs; \
 			} else { \
 				iwos++; \
 			} \
 		} \
 \
-		total_size += (obj->children - 1) * obj->space; \
+		total_size += (children - 1) * obj->space; \
 \
 		if (iwos) { \
 			even_size = _size - total_size; \
@@ -1172,6 +1176,11 @@ static void list_layout(struct Base *base, struct Pair coord, struct Pair size)
 		for (int i = 0; i < obj->children; i++) { \
 			struct ChildBox *c = &obj->child[i]; \
 			_dim_size = c->base->_method(c->base); \
+\
+			if (_dim_size == 0) { \
+				memset(&c->vp, 0, sizeof(c->vp)); \
+				continue; \
+			} \
 \
 			if (_dim_size < 0) { \
 				_dim_size = even_size; \
@@ -1329,6 +1338,7 @@ static void expander_process_event(struct Base *base, const struct Event *ev)
 
 	switch (ev->type) {
 	case EV_EXPANDER_OPEN:
+		obj->box.width = obj->width;
 		obj->box.height = obj->height;
 
 		ui_push_event(&obj->ev);
@@ -1336,6 +1346,7 @@ static void expander_process_event(struct Base *base, const struct Event *ev)
 		ui_invalidate(base);
 		break;
 	case EV_EXPANDER_CLOSE:
+		obj->box.width = 0;
 		obj->box.height = 0;
 
 		ui_push_event(&obj->ev);
@@ -1445,6 +1456,8 @@ static void expander_process_event(struct Base *base, const struct Event *ev)
 		.height = _height, \
 		.bc = { \
 			.padding = _padding, \
+			.h_align = ALIGN_MIDDLE, \
+			.v_align = ALIGN_MIDDLE, \
 			.content = { .base = (struct Base *)&_child }, \
 		}, \
 	}
@@ -1461,14 +1474,15 @@ static void expander_process_event(struct Base *base, const struct Event *ev)
 				.process_event = expander_process_event, \
 				.want_event = 1, \
 			}, \
-			.width = _width, \
-			.height = _height, \
+			.width = 0, \
+			.height = 0, \
 			.bc = { \
 				.padding = _padding, \
 				.content = { .base = (struct Base *)&_child }, \
 			}, \
 		}, \
-		.height = 140, \
+		.width = _width, \
+		.height = _height, \
 		.ev = { .type = EV_LIST_ELEMENT_CHANGED }, \
 	}
 
@@ -1525,7 +1539,7 @@ static struct List top_panel = UI_LIST(1, ALIGN_BEGIN, 3,
 		UI_WRAPPER(INHERIT_PARENT, INHERIT_CHILD, 0,
 			UI_LIST(1, ALIGN_MIDDLE, 3,
 				UI_CHILD(UI_BITMAP(8, UI_BUTTON_NORMAL)),
-				UI_CHILD(UI_TEXT("__7 / 101")),
+				UI_CHILD(UI_WRAPPER(INHERIT_CHILD, INHERIT_CHILD, 0, UI_TEXT("  7 / 101"))),
 				UI_CHILD(UI_BITMAP(4, UI_BUTTON_NORMAL)),
 			)
 		)
@@ -1545,16 +1559,6 @@ static struct List top_panel = UI_LIST(1, ALIGN_BEGIN, 3,
 
 static struct List settings = UI_LIST(1, ALIGN_BEGIN, 7,
 	UI_CHILD(
-		UI_WRAPPER(INHERIT_PARENT, INHERIT_PARENT, 0,
-			UI_CIRCLE(10, 0xeff4ff, .process_event = ui_brush_size_process_event, .want_event = 1)
-		)
-	),
-	UI_CHILD(
-		UI_WRAPPER(40, INHERIT_PARENT, 0,
-			UI_SLIDER(0, 0, .ev = { .type = EV_SLIDER_CHANGE_VALUE })
-		)
-	),
-	UI_CHILD(
 		UI_WRAPPER(INHERIT_CHILD, INHERIT_PARENT, 0,
 			UI_LIST(0, ALIGN_BEGIN, 3,
 				UI_CHILD(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0)),
@@ -1567,6 +1571,16 @@ static struct List settings = UI_LIST(1, ALIGN_BEGIN, 7,
 	UI_CHILD(
 		UI_WRAPPER(40, INHERIT_PARENT, 0,
 			UI_SLIDER(0, 0)
+		)
+	),
+	UI_CHILD(
+		UI_WRAPPER(INHERIT_PARENT, INHERIT_PARENT, 0,
+			UI_CIRCLE(10, 0xeff4ff, .process_event = ui_brush_size_process_event, .want_event = 1)
+		)
+	),
+	UI_CHILD(
+		UI_WRAPPER(40, INHERIT_PARENT, 0,
+			UI_SLIDER(0, 0, .ev = { .type = EV_SLIDER_CHANGE_VALUE })
 		)
 	),
 	UI_CHILD(
@@ -1583,7 +1597,7 @@ static struct List settings = UI_LIST(1, ALIGN_BEGIN, 7,
 
 struct List app = UI_LIST(0, ALIGN_BEGIN, 3,
 	UI_CHILD(top_panel),
-	UI_CHILD(UI_WRAPPER_EXPANDER(INHERIT_PARENT, 0, 0, settings)),
+	UI_CHILD(UI_WRAPPER_EXPANDER(INHERIT_PARENT, 140, 0, settings)),
 	UI_CHILD(UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, 0xeff4ff)),
 );
 
