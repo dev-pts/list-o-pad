@@ -1101,7 +1101,7 @@ static void ui_list_layout(struct Base *base)
 	struct List *obj = (struct List *)base;
 	struct Pair size = rect_size(base->vp);
 
-#define LIST_LAYOUT(_method, _size, _dim, _dim_size, _dim_offset) \
+#define LIST_LAYOUT(_method, _size, _dim, _dim_size, _dim_offset, _method2, _dim_size2, _size2) \
 	do { \
 		int x = 0; \
 		int y = 0; \
@@ -1109,8 +1109,6 @@ static void ui_list_layout(struct Base *base)
 		int last_size = 0; \
 		int total_size = 0; \
 		int iwos = 0; \
-		int width = size.x; \
-		int height = size.y; \
 		int children = 0; \
 \
 		for (int i = 0; i < obj->children; i++) { \
@@ -1140,9 +1138,10 @@ static void ui_list_layout(struct Base *base)
 \
 		for (int i = 0; i < obj->children; i++) { \
 			struct Base *c = obj->child[i]; \
-			_dim_size = c->_method(c); \
+			int _dim_size = c->_method(c); \
+			int _dim_size2 = c->_method2(c); \
 \
-			if (_dim_size == 0) { \
+			if (_dim_size == 0 || _dim_size2 == 0) { \
 				memset(&c->vp, 0, sizeof(c->vp)); \
 				continue; \
 			} \
@@ -1156,6 +1155,10 @@ static void ui_list_layout(struct Base *base)
 				} \
 			} \
 \
+			if (_dim_size2 < 0) { \
+				_dim_size2 = _size2; \
+			} \
+\
 			c->vp = rect_move(rect_new(0, 0, width - 1, height - 1), pair_new(x + base->vp.x1, y + base->vp.y1)); \
 \
 			_dim += _dim_size; \
@@ -1166,9 +1169,9 @@ static void ui_list_layout(struct Base *base)
 	} while (0)
 
 	if (obj->horizontal) {
-		LIST_LAYOUT(get_width, size.w, x, width, x_offset);
+		LIST_LAYOUT(get_width, size.w, x, width, x_offset, get_height, height, size.h);
 	} else {
-		LIST_LAYOUT(get_height, size.h, y, height, y_offset);
+		LIST_LAYOUT(get_height, size.h, y, height, y_offset, get_width, width, size.w);
 	}
 
 	for (int i = 0; i < obj->children; i++) {
@@ -1328,7 +1331,7 @@ static void ui_circle_render(struct Base *base)
 		.child = _children, \
 	}
 
-#define UI_SLIDER(_padding, _horizontal, ...) \
+#define UI_SLIDER(_horizontal, ...) \
 	(struct Slider) { \
 		.base = { \
 			.get_width = ui_dummy_inherit_parent, \
@@ -1473,19 +1476,43 @@ static struct List settings = UI_LIST(1,
 			)
 		),
 		UI_REF(
-			UI_BOX(INHERIT_CHILD, INHERIT_PARENT, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
-				UI_REF(UI_COLOR_BOX(100, 100, 0xeff4ff))
+			UI_BOX(INHERIT_PARENT, INHERIT_CHILD, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
+				UI_REF(
+					UI_LIST(0,
+						UI_CHILDREN(
+							UI_REF(
+								UI_BOX(INHERIT_CHILD, INHERIT_PARENT, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
+									UI_REF(UI_COLOR_BOX(100, 100, 0xeff4ff))
+								)
+							),
+							UI_REF(
+								UI_BOX(INHERIT_PARENT, 30, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
+									UI_REF(UI_SLIDER(1))
+								)
+							),
+						)
+					)
+				)
 			)
 		),
-		UI_REF(UI_BOX(40, INHERIT_PARENT, 0, ALIGN_MIDDLE, ALIGN_MIDDLE, UI_REF(UI_SLIDER(0, 0)))),
 		UI_REF(
-			UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
-				UI_REF(settings_brush_circle)
-			)
-		),
-		UI_REF(
-			UI_BOX(40, INHERIT_PARENT, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
-				UI_REF(UI_SLIDER(0, 0, .on_changed = ui_brush_size_process_event))
+			UI_BOX(INHERIT_PARENT, INHERIT_CHILD, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
+				UI_REF(
+					UI_LIST(0,
+						UI_CHILDREN(
+							UI_REF(
+								UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
+									UI_REF(settings_brush_circle)
+								)
+							),
+							UI_REF(
+								UI_BOX(INHERIT_PARENT, 30, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
+									UI_REF(UI_SLIDER(1, .on_changed = ui_brush_size_process_event))
+								)
+							),
+						)
+					)
+				)
 			)
 		),
 		UI_REF(
