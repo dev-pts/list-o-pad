@@ -1101,7 +1101,7 @@ static void ui_list_layout(struct Base *base)
 	struct List *obj = (struct List *)base;
 	struct Pair size = rect_size(base->vp);
 
-#define LIST_LAYOUT(_method, _size, _dim, _dim_size, _dim_offset, _method2, _dim_size2, _size2) \
+#define LIST_LAYOUT(_method, _size, _dim, _dim_size, _method2, _dim_size2, _size2) \
 	do { \
 		int x = 0; \
 		int y = 0; \
@@ -1169,9 +1169,9 @@ static void ui_list_layout(struct Base *base)
 	} while (0)
 
 	if (obj->horizontal) {
-		LIST_LAYOUT(get_width, size.w, x, width, x_offset, get_height, height, size.h);
+		LIST_LAYOUT(get_width, size.w, x, width, get_height, height, size.h);
 	} else {
-		LIST_LAYOUT(get_height, size.h, y, height, y_offset, get_width, width, size.w);
+		LIST_LAYOUT(get_height, size.h, y, height, get_width, width, size.w);
 	}
 
 	for (int i = 0; i < obj->children; i++) {
@@ -1463,7 +1463,7 @@ static struct Circle settings_brush_circle = UI_CIRCLE(1, 0xeff4ff);
 static struct List settings = UI_LIST(1,
 	UI_CHILDREN(
 		UI_REF(
-			UI_BOX(INHERIT_PARENT, INHERIT_CHILD, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
+			UI_BOX(INHERIT_CHILD, INHERIT_CHILD, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
 				UI_REF(
 					UI_LIST(0,
 						UI_CHILDREN(
@@ -1476,43 +1476,23 @@ static struct List settings = UI_LIST(1,
 			)
 		),
 		UI_REF(
-			UI_BOX(INHERIT_PARENT, INHERIT_CHILD, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
-				UI_REF(
-					UI_LIST(0,
-						UI_CHILDREN(
-							UI_REF(
-								UI_BOX(INHERIT_CHILD, INHERIT_PARENT, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
-									UI_REF(UI_COLOR_BOX(100, 100, 0xeff4ff))
-								)
-							),
-							UI_REF(
-								UI_BOX(INHERIT_PARENT, 30, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
-									UI_REF(UI_SLIDER(1))
-								)
-							),
-						)
-					)
-				)
+			UI_BOX(INHERIT_CHILD, INHERIT_PARENT, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
+				UI_REF(UI_COLOR_BOX(100, 100, 0xeff4ff))
 			)
 		),
 		UI_REF(
-			UI_BOX(INHERIT_PARENT, INHERIT_CHILD, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
-				UI_REF(
-					UI_LIST(0,
-						UI_CHILDREN(
-							UI_REF(
-								UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
-									UI_REF(settings_brush_circle)
-								)
-							),
-							UI_REF(
-								UI_BOX(INHERIT_PARENT, 30, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
-									UI_REF(UI_SLIDER(1, .on_changed = ui_brush_size_process_event))
-								)
-							),
-						)
-					)
-				)
+			UI_BOX(30, INHERIT_PARENT, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
+				UI_REF(UI_SLIDER(0))
+			)
+		),
+		UI_REF(
+			UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
+				UI_REF(settings_brush_circle)
+			)
+		),
+		UI_REF(
+			UI_BOX(30, INHERIT_PARENT, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
+				UI_REF(UI_SLIDER(0, .on_changed = ui_brush_size_process_event))
 			)
 		),
 		UI_REF(
