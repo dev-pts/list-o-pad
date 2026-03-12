@@ -226,6 +226,15 @@ static void rect_dump(struct Rect r)
 #endif
 }
 
+static void draw_pixel_check(struct Rect r, struct Pair p, uint32_t color)
+{
+	if (!rect_hit(r, p)) {
+		return;
+	}
+
+	fb[p.y * H_RES + p.x] = color;
+}
+
 static void draw_rect(struct Rect r, uint32_t color)
 {
 	if (!rect_valid(r)) {
@@ -239,7 +248,7 @@ static void draw_rect(struct Rect r, uint32_t color)
 	}
 }
 
-static void draw_rect_gradient(struct Rect r, uint32_t color_start, uint32_t color_end, int horizontal)
+static void draw_rect_gradient(struct Rect r, struct Rect s, uint32_t color_start, uint32_t color_end, int horizontal)
 {
 	if (!rect_valid(r)) {
 		return;
@@ -287,7 +296,7 @@ static void draw_rect_gradient(struct Rect r, uint32_t color_start, uint32_t col
 			for (int j = r.x1; j <= r.x2; j++) {
 				uint32_t color = (cs_r2 << 16) | (cs_g2 << 8) | (cs_b2 << 0);
 
-				fb[i * H_RES + j] = color;
+				draw_pixel_check(s, pair_new(j, i), color);
 
 				hz_r += len_r;
 				if (hz_r >= len) {
@@ -318,7 +327,7 @@ static void draw_rect_gradient(struct Rect r, uint32_t color_start, uint32_t col
 			uint32_t color = (cs_r2 << 16) | (cs_g2 << 8) | (cs_b2 << 0);
 
 			for (int j = r.x1; j <= r.x2; j++) {
-				fb[i * H_RES + j] = color;
+				draw_pixel_check(s, pair_new(j, i), color);
 			}
 
 			hz_r += len_r;
@@ -338,15 +347,6 @@ static void draw_rect_gradient(struct Rect r, uint32_t color_start, uint32_t col
 			}
 		}
 	}
-}
-
-static void draw_pixel_check(struct Rect r, struct Pair p, uint32_t color)
-{
-	if (!rect_hit(r, p)) {
-		return;
-	}
-
-	fb[p.y * H_RES + p.x] = color;
 }
 
 static void draw_circle(struct Rect vp, struct Pair c, int r, uint32_t color, int smooth)
@@ -640,11 +640,12 @@ struct Slider {
 	struct Base base;
 
 	int horizontal;
+	int min;
+	int max;
 	int value;
-	int frac;
 
-	struct Pair p;
-	int old_value;
+	int len;
+	int frac;
 
 	struct {
 		struct Base *c;
@@ -936,7 +937,7 @@ static void ui_color_gradient_render(struct Base *base)
 		return;
 	}
 
-	draw_rect_gradient(base->vp, obj->super.color, obj->color_end, obj->horizontal);
+	draw_rect_gradient(base->vp, r, obj->super.color, obj->color_end, obj->horizontal);
 }
 
 static int ui_bitmap_get_width(struct Base *base)
@@ -1083,6 +1084,16 @@ static void ui_slider_layout(struct Base *base)
 	struct Slider *obj = (struct Slider *)base;
 	struct Pair size = rect_size(base->vp);
 
+	if (obj->horizontal) {
+		obj->len = base->vp.x2 - base->vp.x1;
+	} else {
+		obj->len = base->vp.y2 - base->vp.y1;
+	}
+
+	obj->len -= obj->knob.size;
+	/* So that we have convenient ranges 1: [1, 1.5], 2: [1.5, 2.5], ... */
+	obj->frac = obj->len / (2 * (obj->max - obj->min));
+
 	{
 		struct Base *knob = obj->knob.c;
 		int s = obj->knob.size;
@@ -1100,18 +1111,14 @@ static void ui_slider_layout(struct Base *base)
 		}
 
 		if (obj->horizontal) {
-			obj->frac = (w - s);
-
-			x = obj->frac * obj->value / 100;
+			x = (obj->value - obj->min) * obj->len / (obj->max - obj->min);
 			w = s;
 		} else {
-			obj->frac = (h - s);
-
-			y = obj->frac * (100 - obj->value) / 100;
+			y = (obj->value - obj->min) * obj->len / (obj->max - obj->min);
 			h = s;
 		}
 
-		struct Rect vp = rect_move(rect_new(0, 0, w - 1, h - 1), pair_new(x + base->vp.x1, y + base->vp.y1));
+		struct Rect vp = rect_move(rect_new(0, 0, w - 1, h - 1), pair_new(x + base->vp.x1, base->vp.y2 - y - obj->knob.size));
 		struct Rect svp = rect_intersect(vp, base->svp);
 
 		ui_layout_child(base, knob, vp, svp);
@@ -1139,9 +1146,10 @@ static void ui_slider_layout(struct Base *base)
 		} else {
 			x = (w - s) / 2;
 			w = s;
+			h = obj->len;
 		}
 
-		struct Rect vp = rect_move(rect_new(0, 0, w - 1, h - 1), pair_new(x + base->vp.x1, y + base->vp.y1));
+		struct Rect vp = rect_move(rect_new(0, 0, w - 1, h - 1), pair_new(x + base->vp.x1, y + base->vp.y1 + obj->knob.size / 2));
 		struct Rect svp = rect_intersect(vp, base->svp);
 
 		ui_layout_child(base, line, vp, svp);
@@ -1169,35 +1177,30 @@ static struct Base *ui_slider_pick(struct Base *base, struct Pair p)
 		return base;
 	}
 
+	if (rect_hit(base->svp, p)) {
+		return base;
+	}
+
 	return NULL;
 }
 
 static void ui_slider_handle_cursor_event(struct Base *base, enum EventCursorType type, struct Pair p)
 {
 	struct Slider *obj = (struct Slider *)base;
-	int diff;
 	int value;
 
 	switch (type) {
 	case EV_CURSOR_DOWN:
-		obj->p = p;
-		obj->old_value = obj->value;
-		break;
 	case EV_CURSOR_MOVE:
 		if (obj->horizontal) {
-			diff = p.x - obj->p.x;
+			value = obj->min + (obj->max - obj->min) * (p.x - (base->vp.x1 + obj->knob.size / 2) - obj->frac) / obj->len;
 		} else {
-			diff = obj->p.y - p.y;
-		}
-		value = obj->old_value + diff * 100 / obj->frac;
-
-		if (value < 0) {
-			value = 0;
-		} else if (value > 100) {
-			value = 100;
+			value = obj->min + (obj->max - obj->min) * (base->vp.y2 - obj->knob.size - (p.y - obj->knob.size / 2 - obj->frac)) / obj->len;
 		}
 
-		obj->value = obj->on_changed(obj->value, value);
+		obj->value = CLAMP(value, obj->min, obj->max);
+
+		obj->on_changed(obj->value, obj->value);
 		break;
 	default:
 		break;
@@ -1414,42 +1417,6 @@ static void ui_color_picker_layout(struct Base *base)
 
 static void ui_color_picker_render(struct Base *base)
 {
-#if 0
-	struct Rect vp_rrg = rect_new(0, 0, 100 - 1, 20 - 1);
-	struct Rect vp_rgg = rect_new(0, 0, 20 - 1, 100 - 1);
-	struct Rect vp_bgg = rect_new(0, 0, 100 - 1, 20 - 1);
-
-	struct Rect vp_bbg = rect_new(0, 0, 100 - 1, 20 - 1);
-	struct Rect vp_rbb = rect_new(0, 0, 20 - 1, 100 - 1);
-	struct Rect vp_brr = rect_new(0, 0, 100 - 1, 20 - 1);
-
-	struct Rect vp_bc = rect_new(0, 0, 100 - 1, 20 - 1);
-	struct Rect vp_cw = rect_new(0, 0, 100 - 1, 20 - 1);
-
-	vp_rrg = rect_move(vp_rrg, pair_new(2 + 120 + 0, 0));
-	vp_rgg = rect_move(vp_rgg, pair_new(2 + 120 + 100, 20));
-	vp_bgg = rect_move(vp_bgg, pair_new(2 + 120 + 0, 120));
-
-	vp_bbg = rect_move(vp_bbg, pair_new(20 + 0, 120));
-	vp_rbb = rect_move(vp_rbb, pair_new(0, 20));
-	vp_brr = rect_move(vp_brr, pair_new(20 + 0, 0));
-
-	vp_bc = rect_move(vp_bc, pair_new(20, 60));
-	vp_cw = rect_move(vp_cw, pair_new(2 + 120, 60));
-
-	draw_rect_gradient(vp_rrg, 0xff0000, 0xffff00, 0);
-	draw_rect_gradient(vp_rgg, 0xffff00, 0x00ff00, 1);
-	draw_rect_gradient(vp_bgg, 0x00ffff, 0x00ff00, 0);
-
-	draw_rect_gradient(vp_brr, 0xff00ff, 0xff0000, 0);
-	draw_rect_gradient(vp_rbb, 0xff00ff, 0x0000ff, 1);
-	draw_rect_gradient(vp_bbg, 0x0000ff, 0x00ffff, 0);
-
-	uint32_t color = 0xab32ef;
-
-	draw_rect_gradient(vp_bc, 0x000000, color, 0);
-	draw_rect_gradient(vp_cw, color, 0xffffff, 0);
-#endif
 }
 
 static void ui_color_picker_cursor_event(struct Base *base, enum EventCursorType type, struct Pair p)
@@ -1574,13 +1541,15 @@ static void ui_color_picker_activate_event(struct Base *base, enum EventActivate
 			.handle_activate_event = ui_slider_handle_activate_event, \
 		}, \
 		.horizontal = _horizontal, \
-		.value = 0, \
+		.value = 1, \
+		.min = 1, \
+		.max = 16, \
 		.line = { \
 			.size = 4, \
 			.c = UI_REF(UI_COLOR_BOX(INHERIT_PARENT, INHERIT_PARENT, 0)), \
 		}, \
 		.knob = { \
-			.size = 16, \
+			.size = 4, \
 			.c = UI_REF(UI_COLOR_BOX(INHERIT_PARENT, INHERIT_PARENT, 0xeff4ff)), \
 		}, \
 		__VA_ARGS__ \
@@ -1617,12 +1586,14 @@ static void ui_color_picker_activate_event(struct Base *base, enum EventActivate
 		}, \
 		.horizontal = _horizontal, \
 		.value = 0, \
+		.min = 0, \
+		.max = 100, \
 		.line = { \
 			.size = -1, \
 			.c = UI_REF(UI_GRADIENT_BOX(INHERIT_PARENT, INHERIT_PARENT, _color_start, _color_end, _horizontal)), \
 		}, \
 		.knob = { \
-			.size = 1, \
+			.size = 0, \
 			.c = UI_REF(UI_COLOR_BOX(INHERIT_PARENT, INHERIT_PARENT, 0xeff4ff)), \
 		}, \
 		__VA_ARGS__ \
@@ -1645,11 +1616,13 @@ static void ui_color_picker_activate_event(struct Base *base, enum EventActivate
 static struct ButtonBitmap ui_button_bitmap_pen;
 static struct ButtonBitmap ui_button_bitmap_pencil;
 static struct ButtonBitmap ui_button_bitmap_eraser;
+static struct ButtonBitmap ui_button_bitmap_picker;
 
 static struct Base *tool_group[] = {
 	(struct Base *)&ui_button_bitmap_pen,
 	(struct Base *)&ui_button_bitmap_pencil,
 	(struct Base *)&ui_button_bitmap_eraser,
+	(struct Base *)&ui_button_bitmap_picker,
 };
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(*(a)))
@@ -1671,10 +1644,11 @@ static void ui_button_bitmap_tool_activate(struct Base *base)
 static struct ButtonBitmap ui_button_bitmap_pen = UI_BUTTON_BITMAP(0, UI_BUTTON_STICK, .on_activate = ui_button_bitmap_tool_activate);
 static struct ButtonBitmap ui_button_bitmap_pencil = UI_BUTTON_BITMAP(1, UI_BUTTON_STICK, .on_activate = ui_button_bitmap_tool_activate);
 static struct ButtonBitmap ui_button_bitmap_eraser = UI_BUTTON_BITMAP(2, UI_BUTTON_STICK, .on_activate = ui_button_bitmap_tool_activate);
+static struct ButtonBitmap ui_button_bitmap_picker = UI_BUTTON_BITMAP(14, UI_BUTTON_STICK, .on_activate = ui_button_bitmap_tool_activate);
 
 static struct List settings;
 
-static struct BoxExpander settings_expander = UI_BOX_EXPANDER(UI_BOX_RAW(INHERIT_PARENT, 0, 0, ALIGN_MIDDLE, ALIGN_MIDDLE, UI_REF(settings)), INHERIT_PARENT, 140);
+static struct BoxExpander settings_expander = UI_BOX_EXPANDER(UI_BOX_RAW(0, 0, 0, ALIGN_BEGIN, ALIGN_MIDDLE, UI_REF(settings)), INHERIT_CHILD, 140);
 
 static void ui_button_bitmap_settings_activate(struct Base *base);
 
@@ -1688,6 +1662,7 @@ static struct List top_panel = UI_LIST(1,
 							UI_REF(ui_button_bitmap_pen),
 							UI_REF(ui_button_bitmap_pencil),
 							UI_REF(ui_button_bitmap_eraser),
+							UI_REF(ui_button_bitmap_picker),
 							UI_REF(UI_BUTTON_BITMAP(3, UI_BUTTON_SWITCH, .on_activate = ui_button_bitmap_settings_activate)),
 						)
 					)
@@ -1734,7 +1709,7 @@ static struct Text settings_brush_text = UI_TEXT(settings_brush_text_raw);
 static struct List settings = UI_LIST(1,
 	UI_CHILDREN(
 		UI_REF(
-			UI_BOX(INHERIT_CHILD, INHERIT_CHILD, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
+			UI_BOX(240, INHERIT_CHILD, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
 				UI_REF(
 					UI_LIST(0,
 						UI_CHILDREN(
@@ -1782,10 +1757,10 @@ static struct List settings = UI_LIST(1,
 																UI_LIST(1,
 																	UI_CHILDREN(
 																		UI_REF(
-																			UI_SLIDER_GRADIENT(1, 0x000000, 0x123456)
+																			UI_SLIDER_GRADIENT(1, 0x000000, 0xff8800)
 																		),
 																		UI_REF(
-																			UI_SLIDER_GRADIENT(1, 0x123456, 0xffffff)
+																			UI_SLIDER_GRADIENT(1, 0x884400, 0x888888)
 																		),
 																	)
 																)
@@ -1860,20 +1835,6 @@ static struct List settings = UI_LIST(1,
 				UI_REF(UI_SLIDER(0, .on_changed = ui_brush_size_process_event))
 			)
 		),
-		UI_REF(
-			UI_BOX(INHERIT_CHILD, INHERIT_PARENT, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
-				UI_REF(
-					UI_LIST(0,
-						UI_CHILDREN(
-							UI_REF(UI_BUTTON_BITMAP(13, UI_BUTTON_NORMAL)),
-							UI_REF(UI_BUTTON_BITMAP(12, UI_BUTTON_NORMAL)),
-							UI_REF(UI_BUTTON_BITMAP(11, UI_BUTTON_NORMAL)),
-						)
-					)
-				)
-			)
-		),
-		UI_REF(UI_COLOR_BOX(INHERIT_PARENT, INHERIT_PARENT, 0xeff4ff)),
 	)
 );
 
@@ -1901,13 +1862,12 @@ static void ui_button_bitmap_settings_activate(struct Base *base)
 static int ui_brush_size_process_event(int old_value, int new_value)
 {
 	struct Circle *obj = &settings_brush_circle;
-	unsigned value = 1 + 16 * new_value / 100;
 
-	obj->radius = value;
+	obj->radius = new_value;
 
-	snprintf(settings_brush_text_raw, sizeof(settings_brush_text_raw), "%d", value % 100);
+	snprintf(settings_brush_text_raw, sizeof(settings_brush_text_raw), "%d", obj->radius % 100);
 
-	return (value - 1) * 100 / 16;
+	return 0;
 }
 
 #ifndef FPGA
