@@ -1702,6 +1702,9 @@ static struct List top_panel = UI_LIST(1,
 
 static void ui_brush_size_process_event(int value);
 
+static void ui_color_picker_value_changed(int value);
+static void ui_color_picker_saturation_changed(int value);
+
 static struct Circle settings_brush_circle = UI_CIRCLE(1, 0xeff4ff);
 static char settings_brush_text_raw[3] = "1";
 static struct Text settings_brush_text = UI_TEXT(settings_brush_text_raw);
@@ -1711,6 +1714,15 @@ static int brush_color_saturation = 0;
 static int brush_color_value = 100;
 static char color_rgb_text[12] = "255 255 255";
 static struct Text color_rgb = UI_TEXT(color_rgb_text);
+static struct Slider ui_color_picker_value = UI_SLIDER_GRADIENT(1, 0x000000, 0xff8800, .on_changed = ui_color_picker_value_changed);
+static struct Slider ui_color_picker_saturation = UI_SLIDER_GRADIENT(1, 0x884400, 0x888888, .on_changed = ui_color_picker_saturation_changed);
+
+static struct ColorBox brush_color[4] = {
+	UI_COLOR_BOX(20, 20, 0xeff4ff),
+	UI_COLOR_BOX(20, 20, 0xeff4ff),
+	UI_COLOR_BOX(20, 20, 0xeff4ff),
+	UI_COLOR_BOX(20, 20, 0xeff4ff),
+};
 
 static void ui_color_picker_changed(void)
 {
@@ -1731,13 +1743,26 @@ static void ui_color_picker_changed(void)
 	b = (b * (100 - brush_color_saturation) + l * brush_color_saturation) / 100;
 
 	snprintf(color_rgb_text, sizeof(color_rgb_text), "%d %d %d", r, g, b);
+
+	struct GradientBox *cv = (struct GradientBox *)ui_color_picker_value.line.c;
+
+	cv->color_end = brush_color_hue;
+
+	struct GradientBox *cs = (struct GradientBox *)ui_color_picker_saturation.line.c;
+
+	cs->super.color = brush_color_hue;
+	cs->color_end = l | (l << 8) | (l << 16);
+
+	for (int i = 0; i < ARRAY_SIZE(brush_color); i++) {
+		brush_color[i].color = (r << 16) | (g << 8) | b;
+	}
 }
 
 static void ui_color_picker_rbr_changed(int value)
 {
 	value = (100 - value) * 0xff / 100;
 
-	brush_color_hue = 0x000000 | (value << 0);
+	brush_color_hue = 0xff0000 | (value << 0);
 
 	ui_color_picker_changed();
 }
@@ -1813,14 +1838,14 @@ static struct List settings = UI_LIST(1,
 									UI_REF(
 										UI_LIST(1,
 											UI_CHILDREN(
-												UI_REF(UI_COLOR_BOX(20, 20, 0xeff4ff)),
+												UI_REF(brush_color[0]),
 												UI_REF(
 													UI_SLIDER_GRADIENT(1, 0xff00ff, 0xff0000, .on_changed = ui_color_picker_rbr_changed)
 												),
 												UI_REF(
 													UI_SLIDER_GRADIENT(1, 0xff0000, 0xffff00, .on_changed = ui_color_picker_rrg_changed)
 												),
-												UI_REF(UI_COLOR_BOX(20, 20, 0xeff4ff)),
+												UI_REF(brush_color[1]),
 											)
 										)
 									)
@@ -1851,12 +1876,8 @@ static struct List settings = UI_LIST(1,
 															UI_REF(
 																UI_LIST(1,
 																	UI_CHILDREN(
-																		UI_REF(
-																			UI_SLIDER_GRADIENT(1, 0x000000, 0xff8800, .on_changed = ui_color_picker_value_changed)
-																		),
-																		UI_REF(
-																			UI_SLIDER_GRADIENT(1, 0x884400, 0x888888, .on_changed = ui_color_picker_saturation_changed)
-																		),
+																		UI_REF(ui_color_picker_value),
+																		UI_REF(ui_color_picker_saturation),
 																	)
 																)
 															)
@@ -1885,14 +1906,14 @@ static struct List settings = UI_LIST(1,
 									UI_REF(
 										UI_LIST(1,
 											UI_CHILDREN(
-												UI_REF(UI_COLOR_BOX(20, 20, 0xeff4ff)),
+												UI_REF(brush_color[2]),
 												UI_REF(
 													UI_SLIDER_GRADIENT(1, 0x0000ff, 0x00ffff, .on_changed = ui_color_picker_bgb_changed)
 												),
 												UI_REF(
 													UI_SLIDER_GRADIENT(1, 0x00ffff, 0x00ff00, .on_changed = ui_color_picker_gbg_changed)
 												),
-												UI_REF(UI_COLOR_BOX(20, 20, 0xeff4ff)),
+												UI_REF(brush_color[3]),
 											)
 										)
 									)
