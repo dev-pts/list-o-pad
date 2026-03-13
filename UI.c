@@ -652,7 +652,7 @@ struct Slider {
 		int size;
 	} knob, line;
 
-	int (*on_changed)(int old_value, int new_value);
+	void (*on_changed)(int value);
 };
 
 struct BoxExpander {
@@ -1200,7 +1200,7 @@ static void ui_slider_handle_cursor_event(struct Base *base, enum EventCursorTyp
 
 		obj->value = CLAMP(value, obj->min, obj->max);
 
-		obj->on_changed(obj->value, obj->value);
+		obj->on_changed(obj->value);
 		break;
 	default:
 		break;
@@ -1700,11 +1700,106 @@ static struct List top_panel = UI_LIST(1,
 	)
 );
 
-static int ui_brush_size_process_event(int old_value, int new_value);
+static void ui_brush_size_process_event(int value);
 
 static struct Circle settings_brush_circle = UI_CIRCLE(1, 0xeff4ff);
 static char settings_brush_text_raw[3] = "1";
 static struct Text settings_brush_text = UI_TEXT(settings_brush_text_raw);
+
+static uint32_t brush_color_hue = 0xffff00;
+static int brush_color_saturation = 0;
+static int brush_color_value = 100;
+static char color_rgb_text[12] = "255 255 255";
+static struct Text color_rgb = UI_TEXT(color_rgb_text);
+
+static void ui_color_picker_changed(void)
+{
+	uint32_t color = brush_color_hue;
+
+	uint8_t r = (color >> 16) & 0xff;
+	uint8_t g = (color >> 8) & 0xff;
+	uint8_t b = (color >> 0) & 0xff;
+
+	r = r * brush_color_value / 100;
+	g = g * brush_color_value / 100;
+	b = b * brush_color_value / 100;
+
+	uint32_t l = MAX(MAX(r, g), b);
+
+	r = (r * (100 - brush_color_saturation) + l * brush_color_saturation) / 100;
+	g = (g * (100 - brush_color_saturation) + l * brush_color_saturation) / 100;
+	b = (b * (100 - brush_color_saturation) + l * brush_color_saturation) / 100;
+
+	snprintf(color_rgb_text, sizeof(color_rgb_text), "%d %d %d", r, g, b);
+}
+
+static void ui_color_picker_rbr_changed(int value)
+{
+	value = (100 - value) * 0xff / 100;
+
+	brush_color_hue = 0x000000 | (value << 0);
+
+	ui_color_picker_changed();
+}
+
+static void ui_color_picker_rbb_changed(int value)
+{
+	value = value * 0xff / 100;
+
+	brush_color_hue = 0x0000ff | (value << 16);
+
+	ui_color_picker_changed();
+}
+
+static void ui_color_picker_rrg_changed(int value)
+{
+	value = value * 0xff / 100;
+
+	brush_color_hue = 0xff0000 | (value << 8);
+
+	ui_color_picker_changed();
+}
+
+static void ui_color_picker_rgg_changed(int value)
+{
+	value = value * 0xff / 100;
+
+	brush_color_hue = 0x00ff00 | (value << 16);
+
+	ui_color_picker_changed();
+}
+
+static void ui_color_picker_bgb_changed(int value)
+{
+	value = value * 0xff / 100;
+
+	brush_color_hue = 0x0000ff | (value << 8);
+
+	ui_color_picker_changed();
+}
+
+static void ui_color_picker_gbg_changed(int value)
+{
+	value = (100 - value) * 0xff / 100;
+
+	brush_color_hue = 0x00ff00 | (value << 0);
+
+	ui_color_picker_changed();
+}
+
+static void ui_color_picker_value_changed(int value)
+{
+	brush_color_value = value;
+
+	ui_color_picker_changed();
+}
+
+static void ui_color_picker_saturation_changed(int value)
+{
+	brush_color_saturation = value;
+
+	ui_color_picker_changed();
+}
 
 static struct List settings = UI_LIST(1,
 	UI_CHILDREN(
@@ -1720,10 +1815,10 @@ static struct List settings = UI_LIST(1,
 											UI_CHILDREN(
 												UI_REF(UI_COLOR_BOX(20, 20, 0xeff4ff)),
 												UI_REF(
-													UI_SLIDER_GRADIENT(1, 0xff00ff, 0xff0000)
+													UI_SLIDER_GRADIENT(1, 0xff00ff, 0xff0000, .on_changed = ui_color_picker_rbr_changed)
 												),
 												UI_REF(
-													UI_SLIDER_GRADIENT(1, 0xff0000, 0xffff00)
+													UI_SLIDER_GRADIENT(1, 0xff0000, 0xffff00, .on_changed = ui_color_picker_rrg_changed)
 												),
 												UI_REF(UI_COLOR_BOX(20, 20, 0xeff4ff)),
 											)
@@ -1737,7 +1832,7 @@ static struct List settings = UI_LIST(1,
 										UI_REF(
 											UI_BOX(20, INHERIT_PARENT, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
 												UI_REF(
-													UI_SLIDER_GRADIENT(0, 0xff00ff, 0x0000ff)
+													UI_SLIDER_GRADIENT(0, 0xff00ff, 0x0000ff, .on_changed = ui_color_picker_rbb_changed)
 												)
 											)
 										),
@@ -1757,10 +1852,10 @@ static struct List settings = UI_LIST(1,
 																UI_LIST(1,
 																	UI_CHILDREN(
 																		UI_REF(
-																			UI_SLIDER_GRADIENT(1, 0x000000, 0xff8800)
+																			UI_SLIDER_GRADIENT(1, 0x000000, 0xff8800, .on_changed = ui_color_picker_value_changed)
 																		),
 																		UI_REF(
-																			UI_SLIDER_GRADIENT(1, 0x884400, 0x888888)
+																			UI_SLIDER_GRADIENT(1, 0x884400, 0x888888, .on_changed = ui_color_picker_saturation_changed)
 																		),
 																	)
 																)
@@ -1769,9 +1864,7 @@ static struct List settings = UI_LIST(1,
 													),
 													UI_REF(
 														UI_BOX(INHERIT_PARENT, INHERIT_PARENT, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
-															UI_REF(
-																UI_TEXT("255 255 255")
-															)
+															UI_REF(color_rgb)
 														)
 													),
 												)
@@ -1780,7 +1873,7 @@ static struct List settings = UI_LIST(1,
 										UI_REF(
 											UI_BOX(20, INHERIT_PARENT, 0, ALIGN_MIDDLE, ALIGN_MIDDLE,
 												UI_REF(
-													UI_SLIDER_GRADIENT(0, 0xffff00, 0x00ff00)
+													UI_SLIDER_GRADIENT(0, 0xffff00, 0x00ff00, .on_changed = ui_color_picker_rgg_changed)
 												)
 											)
 										),
@@ -1794,10 +1887,10 @@ static struct List settings = UI_LIST(1,
 											UI_CHILDREN(
 												UI_REF(UI_COLOR_BOX(20, 20, 0xeff4ff)),
 												UI_REF(
-													UI_SLIDER_GRADIENT(1, 0x0000ff, 0x00ffff)
+													UI_SLIDER_GRADIENT(1, 0x0000ff, 0x00ffff, .on_changed = ui_color_picker_bgb_changed)
 												),
 												UI_REF(
-													UI_SLIDER_GRADIENT(1, 0x00ffff, 0x00ff00)
+													UI_SLIDER_GRADIENT(1, 0x00ffff, 0x00ff00, .on_changed = ui_color_picker_gbg_changed)
 												),
 												UI_REF(UI_COLOR_BOX(20, 20, 0xeff4ff)),
 											)
@@ -1859,15 +1952,13 @@ static void ui_button_bitmap_settings_activate(struct Base *base)
 	be->super.height = h;
 }
 
-static int ui_brush_size_process_event(int old_value, int new_value)
+static void ui_brush_size_process_event(int value)
 {
 	struct Circle *obj = &settings_brush_circle;
 
-	obj->radius = new_value;
+	obj->radius = value;
 
 	snprintf(settings_brush_text_raw, sizeof(settings_brush_text_raw), "%d", obj->radius % 100);
-
-	return 0;
 }
 
 #ifndef FPGA
