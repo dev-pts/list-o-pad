@@ -544,34 +544,49 @@ struct Base {
 	 * Goes up to the parent, the parent sets the dirty region,
 	 * and sets valid to 0.
 	 */
-	void (*invalidate)(struct Base *obj);
+	int (*invalidate)(struct Base *obj);
 
 	/* Return something if point p is inside yours svp */
 	struct Base *(*pick)(struct Base *obj, struct Pair p);
 
 	void (*handle_cursor_event)(struct Base *base, enum EventCursorType type, struct Pair p);
 	void (*handle_activate_event)(struct Base *base, enum EventActivateType type);
+
+	struct Base *next;
 };
 
+static struct Base *relayout;
 static struct Base *picked;
 static struct Pair picked_coord;
 
 static void ui_set_vp(struct Base *base, struct Rect vp)
 {
-	base->valid = memcmp(&base->vp, &vp, sizeof(vp)) == 0 ? 1 : 0;
 	base->vp = vp;
 }
 
 static int layout_cnt;
+static int layout_enter_cnt;
 static int render_cnt;
 static int render_skip_cnt;
 
 /* Helper function for parents */
 static void ui_layout_child(struct Base *base, struct Base *child)
 {
-	if (!child->valid) {
-		child->parent = base;
+	layout_enter_cnt++;
 
+	child->parent = base;
+
+	if (base) {
+		if (!rect_valid(base->vp)) {
+			return;
+		}
+	}
+
+	if (!rect_valid(child->vp)) {
+		return;
+	}
+
+	if (!child->valid) {
 		if (child->layout) {
 			child->layout(child, rect_size(child->vp));
 		}
@@ -587,17 +602,27 @@ static void ui_layout_child(struct Base *base, struct Base *child)
 
 static void ui_invalidate(struct Base *base)
 {
-	base->valid = 0;
+	struct Base *last = base;
 
-	if (!base->parent) {
-		return;
+	while (base) {
+		last = base;
+
+		base->valid = 0;
+
+		if (base->invalidate) {
+			if (!base->invalidate(base)) {
+				break;
+			}
+		}
+
+		base = base->parent;
 	}
 
-	if (base->invalidate) {
-		base->invalidate(base);
-	} else {
-		ui_invalidate(base->parent);
+	if (relayout) {
+		last->next = relayout;
 	}
+
+	relayout = last;
 }
 
 static void ui_render(struct Base *base, struct Rect vp, struct Rect svp)
@@ -727,7 +752,14 @@ static void ui_process(struct Base *base, struct Rect screen)
 {
 	base->vp = screen;
 
-	ui_layout_child(NULL, base);
+	while (relayout) {
+		struct Base *base = relayout;
+
+		relayout = base->next;
+		base->next = NULL;
+
+		ui_layout_child(NULL, base);
+	}
 
 	draw_rect(screen, 0x01579b);
 
@@ -950,13 +982,23 @@ static void ui_box_layout_children(struct Base *base)
 	ui_layout_child(base, obj->content);
 }
 
-static void ui_box_invalidate(struct Base *base)
+static int ui_box_invalidate(struct Base *base)
 {
 	struct Box *obj = (struct Box *)base;
 
-	if (obj->width == INHERIT_CHILD || obj->height == INHERIT_CHILD) {
-		ui_invalidate(base->parent);
+	if (obj->width == INHERIT_CHILD) {
+		if (ui_get_width(obj->content) != rect_width(base->vp)) {
+			return 1;
+		}
 	}
+
+	if (obj->height == INHERIT_CHILD) {
+		if (ui_get_height(obj->content) != rect_height(base->vp)) {
+			return 1;
+		}
+	}
+
+	return 0;
 }
 
 static void ui_box_render(struct Base *base, struct Rect vp, struct Rect svp)
@@ -1201,14 +1243,16 @@ static void ui_slider_handle_cursor_event(struct Base *base, enum EventCursorTyp
 	case EV_CURSOR_DOWN:
 	case EV_CURSOR_MOVE:
 		if (obj->horizontal) {
-			value = obj->min + (obj->max - obj->min) * (p.x - (base->vp.x1 + obj->knob.size / 2) - obj->frac) / obj->len;
+			value = obj->min + (obj->max - obj->min) * (p.x - obj->knob.size / 2 - obj->frac) / obj->len;
 		} else {
-			value = obj->min + (obj->max - obj->min) * (base->vp.y2 - obj->knob.size - (p.y - obj->knob.size / 2 - obj->frac)) / obj->len;
+			value = obj->min + (obj->max - obj->min) * (rect_height(base->vp) - obj->knob.size - (p.y - obj->knob.size / 2 - obj->frac)) / obj->len;
 		}
 
 		obj->value = CLAMP(value, obj->min, obj->max);
 
 		obj->on_changed(obj->value);
+
+		ui_invalidate(base);
 		break;
 	default:
 		break;
@@ -1706,6 +1750,10 @@ static void ui_color_picker_changed(void)
 	uint8_t g = (brush_color_hue >> 8) & 0xff;
 	uint8_t b = (brush_color_hue >> 0) & 0xff;
 
+	uint32_t cas_r = CLAMP(r + 255 * brush_color_saturation / 100, 0, 255);
+	uint32_t cas_g = CLAMP(g + 255 * brush_color_saturation / 100, 0, 255);
+	uint32_t cas_b = CLAMP(b + 255 * brush_color_saturation / 100, 0, 255);
+
 	r = r * brush_color_value / 100;
 	g = g * brush_color_value / 100;
 	b = b * brush_color_value / 100;
@@ -1718,9 +1766,11 @@ static void ui_color_picker_changed(void)
 
 	snprintf(color_rgb_text, sizeof(color_rgb_text), "%d %d %d", r, g, b);
 
+	ui_invalidate(&color_rgb.base);
+
 	struct GradientBox *cv = (struct GradientBox *)ui_color_picker_value.line.c;
 
-	cv->color_end = brush_color_hue;
+	cv->color_end = (cas_r << 16) | (cas_g << 8) | cas_b;
 
 	struct GradientBox *cs = (struct GradientBox *)ui_color_picker_saturation.line.c;
 
@@ -1942,12 +1992,10 @@ static void ui_button_bitmap_settings_activate(struct Base *base)
 	be->width = be->super.width;
 	be->height = be->super.height;
 
-	ui_invalidate(&be->super.base);
-
 	be->super.width = w;
 	be->super.height = h;
 
-	ui_invalidate(&be->super.base);
+	ui_invalidate(be->super.base.parent);
 }
 
 static void ui_brush_size_process_event(int value)
@@ -1957,6 +2005,9 @@ static void ui_brush_size_process_event(int value)
 	obj->radius = value;
 
 	snprintf(settings_brush_text_raw, sizeof(settings_brush_text_raw), "%d", obj->radius % 100);
+
+	ui_invalidate(&settings_brush_circle.base);
+	ui_invalidate(&settings_brush_text.base);
 }
 
 #ifndef FPGA
@@ -1989,6 +2040,8 @@ int main()
 		return -1;
 	}
 
+	relayout = &app.base;
+
 	while (1) {
 		SDL_Event e;
 		if (SDL_WaitEvent(&e)) {
@@ -2015,12 +2068,14 @@ int main()
 			}
 
 			layout_cnt = 0;
+			layout_enter_cnt = 0;
 			render_cnt = 0;
 			render_skip_cnt = 0;
 
+			printf("--------------------------------\n");
 			ui_process(&app.base, rect_new(0, 0, H_RES - 1, V_RES - 1));
 
-			printf("%i, %i, %i\n", layout_cnt, render_cnt, render_skip_cnt);
+			printf("%i, %i, %i, %i\n", layout_enter_cnt, layout_cnt, render_cnt, render_skip_cnt);
 		}
 
 		SDL_UpdateTexture(sdl_texture, NULL, fb, H_RES * 4);
