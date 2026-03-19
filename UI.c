@@ -1312,59 +1312,71 @@ static void ui_slider_handle_activate_event(struct Base *base, enum EventActivat
 static int ui_list_get_width(struct Base *base)
 {
 	struct List *obj = (struct List *)base;
-	int w_max = INHERIT_PARENT;
 
-	for (int i = 0; i < obj->children; i++) {
-		struct Base *c = obj->child[i];
-		int cw = c->get_width(c);
+	if (obj->horizontal) {
+		int w_max = 0;
 
-		if (obj->horizontal) {
+		for (int i = 0; i < obj->children; i++) {
+			struct Base *c = obj->child[i];
+			int cw = c->get_width(c);
+
 			if (cw < 0) {
 				return cw;
 			}
 
 			w_max += cw;
-		} else {
+		}
+
+		return w_max + (obj->children - 1) * obj->space;
+	} else {
+		int w_max = INHERIT_PARENT;
+
+		for (int i = 0; i < obj->children; i++) {
+			struct Base *c = obj->child[i];
+			int cw = c->get_width(c);
+
 			if (cw > w_max) {
 				w_max = cw;
 			}
 		}
-	}
 
-	if (obj->horizontal) {
-		w_max += (obj->children - 1) * obj->space;
+		return w_max;
 	}
-
-	return w_max;
 }
 
 static int ui_list_get_height(struct Base *base)
 {
 	struct List *obj = (struct List *)base;
-	int h_max = INHERIT_PARENT;
 
-	for (int i = 0; i < obj->children; i++) {
-		struct Base *c = obj->child[i];
-		int ch = c->get_height(c);
+	if (obj->horizontal) {
+		int h_max = INHERIT_PARENT;
 
-		if (obj->horizontal) {
+		for (int i = 0; i < obj->children; i++) {
+			struct Base *c = obj->child[i];
+			int ch = c->get_height(c);
+
 			if (ch > h_max) {
 				h_max = ch;
 			}
-		} else {
+		}
+
+		return h_max;
+	} else {
+		int h_max = 0;
+
+		for (int i = 0; i < obj->children; i++) {
+			struct Base *c = obj->child[i];
+			int ch = c->get_height(c);
+
 			if (ch < 0) {
 				return ch;
 			}
 
 			h_max += ch;
 		}
-	}
 
-	if (!obj->horizontal) {
-		h_max += (obj->children - 1) * obj->space;
+		return h_max + (obj->children - 1) * obj->space;
 	}
-
-	return h_max;
 }
 
 static void ui_list_layout(struct Base *base, struct Pair size)
@@ -1743,7 +1755,7 @@ static struct List top_panel = UI_LIST(1,
 					UI_LIST(1,
 						UI_CHILDREN(
 							UI_REF(UI_BUTTON_BITMAP(8, UI_BUTTON_NORMAL)),
-							UI_REF(UI_BOX(INHERIT_CHILD, INHERIT_CHILD, ALIGN_MIDDLE, ALIGN_MIDDLE, UI_REF(UI_TEXT("  7 / 101")))),
+							UI_REF(UI_BOX(INHERIT_CHILD, INHERIT_CHILD, ALIGN_MIDDLE, ALIGN_MIDDLE, UI_REF(UI_TEXT("007 / 101")))),
 							UI_REF(UI_BUTTON_BITMAP(4, UI_BUTTON_NORMAL)),
 						)
 					)
