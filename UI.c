@@ -735,11 +735,19 @@ static struct Base *ui_pick_child(struct Base *base, struct Pair p)
 
 static void ui_handle_cursor_event(struct Base *base, enum EventCursorType type, struct Pair p)
 {
+	if (!base->handle_cursor_event) {
+		return;
+	}
+
 	base->handle_cursor_event(base, type, pair_unshift(p, base->offset));
 }
 
 static void ui_handle_activate_event(struct Base *base, enum EventActivateType type)
 {
+	if (!base->handle_activate_event) {
+		return;
+	}
+
 	base->handle_activate_event(base, type);
 }
 
@@ -857,6 +865,8 @@ struct Box {
 	enum Align h_align;
 	enum Align v_align;
 
+	uint32_t color;
+
 	struct Base *content;
 };
 
@@ -905,6 +915,8 @@ struct ColorBox {
 	int width;
 	int height;
 	uint32_t color;
+
+	void (*on_click)(struct ColorBox *obj);
 };
 
 struct GradientBox {
@@ -1045,6 +1057,8 @@ static void ui_box_render(struct Base *base, struct Rect svp)
 {
 	struct Box *obj = (struct Box *)base;
 
+	draw_rect(svp, obj->color);
+
 	ui_render(obj->content, svp);
 }
 
@@ -1074,6 +1088,23 @@ static void ui_color_box_render(struct Base *base, struct Rect svp)
 	struct ColorBox *obj = (struct ColorBox *)base;
 
 	draw_rect(svp, obj->color);
+}
+
+static void ui_color_box_handle_activate_event(struct Base *base, enum EventActivateType type)
+{
+	struct ColorBox *obj = (struct ColorBox *)base;
+
+	switch (type) {
+	case EV_ACTIVATE:
+		if (obj->on_click) {
+			obj->on_click(obj);
+		}
+		break;
+	case EV_DEACTIVATE:
+		break;
+	case EV_CANCEL:
+		break;
+	}
 }
 
 static void ui_color_gradient_render(struct Base *base, struct Rect svp)
@@ -1305,10 +1336,6 @@ static void ui_slider_handle_cursor_event(struct Base *base, enum EventCursorTyp
 	}
 }
 
-static void ui_slider_handle_activate_event(struct Base *base, enum EventActivateType type)
-{
-}
-
 static int ui_list_get_width(struct Base *base)
 {
 	struct List *obj = (struct List *)base;
@@ -1519,7 +1546,7 @@ static void ui_circle_render(struct Base *base, struct Rect svp)
 #define UI_CHILDREN(...) ((struct Base *[]) { __VA_ARGS__ })
 #define UI_CHILDREN_SIZE(a) (sizeof(a) / sizeof(struct Base *))
 
-#define UI_BOX_RAW(_width, _height, _h_align, _v_align, _content) \
+#define UI_BOX_RAW(_width, _height, _h_align, _v_align, _color, _content) \
 	{ \
 		.base = { \
 			.get_width = ui_box_get_width, \
@@ -1534,22 +1561,26 @@ static void ui_circle_render(struct Base *base, struct Rect svp)
 		.height = _height, \
 		.h_align = _h_align, \
 		.v_align = _v_align, \
+		.color = _color, \
 		.content = _content, \
 	}
 
-#define UI_BOX(_width, _height, _h_align, _v_align,_content) \
-	(struct Box)UI_BOX_RAW(_width, _height, _h_align, _v_align,_content)
+#define UI_BOX(_width, _height, _h_align, _v_align, _color, _content) \
+	(struct Box)UI_BOX_RAW(_width, _height, _h_align, _v_align, _color, _content)
 
-#define UI_COLOR_BOX(_width, _height, _color) \
+#define UI_COLOR_BOX(_width, _height, _color, ...) \
 	(struct ColorBox) { \
 		.base = { \
 			.get_width = ui_color_box_get_width, \
 			.get_height = ui_color_box_get_height, \
 			.render = ui_color_box_render, \
+			.pick = ui_dummy_pick, \
+			.handle_activate_event = ui_color_box_handle_activate_event, \
 		}, \
 		.width = _width, \
 		.height = _height, \
 		.color = _color, \
+		__VA_ARGS__ \
 	}
 
 #define UI_GRADIENT_BOX(_width, _height, _color_start, _color_end, _horizontal) \
@@ -1583,7 +1614,7 @@ static void ui_circle_render(struct Base *base, struct Rect svp)
 			.bc = &icon, \
 			.index = _index, \
 			.color = 0xffffff, \
-			.bg_color = 0x01579b, \
+			.bg_color = 0x4caf50, \
 			.h_align = ALIGN_MIDDLE, \
 			.v_align = ALIGN_MIDDLE, \
 		}, \
@@ -1603,7 +1634,7 @@ static void ui_circle_render(struct Base *base, struct Rect svp)
 		.color = 0xeff4ff, \
 	}
 
-#define UI_LIST(_horizontal, _children) \
+#define UI_LIST(_horizontal, _space, _children) \
 	(struct List) { \
 		.base = { \
 			.get_width = ui_list_get_width, \
@@ -1614,7 +1645,7 @@ static void ui_circle_render(struct Base *base, struct Rect svp)
 			.pick = ui_list_pick, \
 		}, \
 		.horizontal = _horizontal, \
-		.space = 4, \
+		.space = _space, \
 		.children = UI_CHILDREN_SIZE(_children), \
 		.child = _children, \
 	}
@@ -1629,7 +1660,6 @@ static void ui_circle_render(struct Base *base, struct Rect svp)
 			.render = ui_slider_render, \
 			.pick = ui_dummy_pick, \
 			.handle_cursor_event = ui_slider_handle_cursor_event, \
-			.handle_activate_event = ui_slider_handle_activate_event, \
 		}, \
 		.horizontal = _horizontal, \
 		.value = 1, \
@@ -1674,7 +1704,6 @@ static void ui_circle_render(struct Base *base, struct Rect svp)
 			.render = ui_slider_render, \
 			.pick = ui_dummy_pick, \
 			.handle_cursor_event = ui_slider_handle_cursor_event, \
-			.handle_activate_event = ui_slider_handle_activate_event, \
 		}, \
 		.horizontal = _horizontal, \
 		.value = 0, \
@@ -1728,16 +1757,16 @@ static struct ButtonBitmap ui_button_bitmap_picker = UI_BUTTON_BITMAP(14, UI_BUT
 
 static struct List settings;
 
-static struct BoxExpander settings_expander = UI_BOX_EXPANDER(UI_BOX_RAW(0, 0, ALIGN_BEGIN, ALIGN_MIDDLE, UI_REF(settings)), INHERIT_CHILD, 140);
+static struct BoxExpander settings_expander = UI_BOX_EXPANDER(UI_BOX_RAW(0, 0, ALIGN_BEGIN, ALIGN_MIDDLE, 0, UI_REF(settings)), INHERIT_CHILD, INHERIT_CHILD);
 
 static void ui_button_bitmap_settings_activate(struct Base *base);
 
-static struct List top_panel = UI_LIST(1,
+static struct List top_panel = UI_LIST(1, 4,
 	UI_CHILDREN(
 		UI_REF(
-			UI_BOX(INHERIT_PARENT, INHERIT_CHILD, ALIGN_BEGIN, ALIGN_BEGIN,
+			UI_BOX(INHERIT_PARENT, INHERIT_CHILD, ALIGN_MIDDLE, ALIGN_BEGIN, 0x4caf50,
 				UI_REF(
-					UI_LIST(1,
+					UI_LIST(1, 4,
 						UI_CHILDREN(
 							UI_REF(ui_button_bitmap_pen),
 							UI_REF(ui_button_bitmap_pencil),
@@ -1750,12 +1779,12 @@ static struct List top_panel = UI_LIST(1,
 			)
 		),
 		UI_REF(
-			UI_BOX(INHERIT_PARENT, INHERIT_CHILD, ALIGN_MIDDLE, ALIGN_BEGIN,
+			UI_BOX(INHERIT_PARENT, INHERIT_CHILD, ALIGN_MIDDLE, ALIGN_BEGIN, 0x4caf50,
 				UI_REF(
-					UI_LIST(1,
+					UI_LIST(1, 4,
 						UI_CHILDREN(
 							UI_REF(UI_BUTTON_BITMAP(8, UI_BUTTON_NORMAL)),
-							UI_REF(UI_BOX(INHERIT_CHILD, INHERIT_CHILD, ALIGN_MIDDLE, ALIGN_MIDDLE, UI_REF(UI_TEXT("007 / 101")))),
+							UI_REF(UI_BOX(INHERIT_CHILD, INHERIT_PARENT, ALIGN_MIDDLE, ALIGN_MIDDLE, 0x4caf50, UI_REF(UI_TEXT("007 / 101")))),
 							UI_REF(UI_BUTTON_BITMAP(4, UI_BUTTON_NORMAL)),
 						)
 					)
@@ -1763,9 +1792,9 @@ static struct List top_panel = UI_LIST(1,
 			)
 		),
 		UI_REF(
-			UI_BOX(INHERIT_PARENT, INHERIT_CHILD, ALIGN_END, ALIGN_BEGIN,
+			UI_BOX(INHERIT_PARENT, INHERIT_CHILD, ALIGN_MIDDLE, ALIGN_BEGIN, 0x4caf50,
 				UI_REF(
-					UI_LIST(1,
+					UI_LIST(1, 4,
 						UI_CHILDREN(
 							UI_REF(UI_BUTTON_BITMAP(6, UI_BUTTON_NORMAL)),
 							UI_REF(UI_BUTTON_BITMAP(7, UI_BUTTON_NORMAL)),
@@ -1797,12 +1826,7 @@ static struct Text color_rgb = UI_TEXT(color_rgb_text);
 static struct Slider ui_color_picker_value = UI_SLIDER_GRADIENT(1, 0x000000, 0xff8800, .on_changed = ui_color_picker_value_changed);
 static struct Slider ui_color_picker_saturation = UI_SLIDER_GRADIENT(1, 0x884400, 0xffffff, .on_changed = ui_color_picker_saturation_changed);
 
-static struct ColorBox brush_color[4] = {
-	UI_COLOR_BOX(20, 20, 0xeff4ff),
-	UI_COLOR_BOX(20, 20, 0xeff4ff),
-	UI_COLOR_BOX(20, 20, 0xeff4ff),
-	UI_COLOR_BOX(20, 20, 0xeff4ff),
-};
+static struct ColorBox brush_color = UI_COLOR_BOX(INHERIT_PARENT, INHERIT_PARENT, 0xeff4ff);
 
 static void ui_color_picker_changed(void)
 {
@@ -1841,10 +1865,8 @@ static void ui_color_picker_changed(void)
 
 	ui_update_dirty(&cs->super.base);
 
-	for (int i = 0; i < ARRAY_SIZE(brush_color); i++) {
-		brush_color[i].color = (r << 16) | (g << 8) | b;
-		ui_update_dirty(&brush_color[i].base);
-	}
+	brush_color.color = (r << 16) | (g << 8) | b;
+	ui_update_dirty(&brush_color.base);
 }
 
 static void ui_color_picker_rbr_changed(int value)
@@ -1915,65 +1937,90 @@ static void ui_color_picker_saturation_changed(int value)
 	ui_color_picker_changed();
 }
 
-static struct List settings = UI_LIST(1,
+static void ui_brush_color_set(struct ColorBox *obj)
+{
+	brush_color_hue = obj->color;
+
+	ui_color_picker_changed();
+}
+
+static struct List settings = UI_LIST(1, 4,
 	UI_CHILDREN(
+		UI_REF(brush_color),
 		UI_REF(
-			UI_BOX(240, INHERIT_CHILD, ALIGN_MIDDLE, ALIGN_MIDDLE,
+			UI_BOX(INHERIT_CHILD, INHERIT_CHILD, ALIGN_MIDDLE, ALIGN_MIDDLE, 0,
 				UI_REF(
-					UI_LIST(0,
+					UI_LIST(0, 4,
 						UI_CHILDREN(
 							UI_REF(
-								UI_BOX(INHERIT_PARENT, 20, ALIGN_MIDDLE, ALIGN_MIDDLE,
+								UI_BOX(INHERIT_CHILD, 20, ALIGN_MIDDLE, ALIGN_MIDDLE, 0,
 									UI_REF(
-										UI_LIST(1,
+										UI_LIST(1, 4,
 											UI_CHILDREN(
-												UI_REF(brush_color[0]),
+												UI_REF(UI_COLOR_BOX(20, 20, 0xff00ff, .on_click = ui_brush_color_set)),
 												UI_REF(
-													UI_SLIDER_GRADIENT(1, 0xff00ff, 0xff0000, .on_changed = ui_color_picker_rbr_changed)
+													UI_BOX(100, 20, ALIGN_BEGIN, ALIGN_BEGIN, 0,
+														UI_REF(
+															UI_SLIDER_GRADIENT(1, 0xff00ff, 0xff0000, .on_changed = ui_color_picker_rbr_changed)
+														)
+													)
 												),
+												UI_REF(UI_COLOR_BOX(20, 20, 0xff0000, .on_click = ui_brush_color_set)),
 												UI_REF(
-													UI_SLIDER_GRADIENT(1, 0xff0000, 0xffff00, .on_changed = ui_color_picker_rrg_changed)
+													UI_BOX(100, 20, ALIGN_BEGIN, ALIGN_BEGIN, 0,
+														UI_REF(
+															UI_SLIDER_GRADIENT(1, 0xff0000, 0xffff00, .on_changed = ui_color_picker_rrg_changed)
+														)
+													)
 												),
-												UI_REF(brush_color[1]),
+												UI_REF(UI_COLOR_BOX(20, 20, 0xffff00, .on_click = ui_brush_color_set)),
 											)
 										)
 									)
 								)
 							),
 							UI_REF(
-								UI_LIST(1,
+								UI_LIST(1, 4,
 									UI_CHILDREN(
 										UI_REF(
-											UI_BOX(20, INHERIT_PARENT, ALIGN_MIDDLE, ALIGN_MIDDLE,
+											UI_BOX(20, 100, ALIGN_MIDDLE, ALIGN_MIDDLE, 0,
 												UI_REF(
 													UI_SLIDER_GRADIENT(0, 0xff00ff, 0x0000ff, .on_changed = ui_color_picker_rbb_changed)
 												)
 											)
 										),
 										UI_REF(
-											UI_LIST(0,
+											UI_LIST(0, 4,
 												UI_CHILDREN(
 													UI_REF(
-														UI_BOX(INHERIT_PARENT, INHERIT_PARENT, ALIGN_MIDDLE, ALIGN_MIDDLE,
+														UI_BOX(INHERIT_PARENT, INHERIT_PARENT, ALIGN_MIDDLE, ALIGN_MIDDLE, 0,
 															UI_REF(
-																UI_COLOR_BOX(0, 0, 0xeff4ff)
+																UI_COLOR_BOX(0, 0, 0)
 															)
 														)
 													),
 													UI_REF(
-														UI_BOX(INHERIT_PARENT, 20, ALIGN_MIDDLE, ALIGN_MIDDLE,
+														UI_BOX(INHERIT_PARENT, 20, ALIGN_MIDDLE, ALIGN_MIDDLE, 0,
 															UI_REF(
-																UI_LIST(1,
+																UI_LIST(1, 4,
 																	UI_CHILDREN(
-																		UI_REF(ui_color_picker_value),
-																		UI_REF(ui_color_picker_saturation),
+																		UI_REF(
+																			UI_BOX(100, 20, ALIGN_BEGIN, ALIGN_BEGIN, 0,
+																				UI_REF(ui_color_picker_value)
+																			)
+																		),
+																		UI_REF(
+																			UI_BOX(100, 20, ALIGN_BEGIN, ALIGN_BEGIN, 0,
+																				UI_REF(ui_color_picker_saturation)
+																			)
+																		),
 																	)
 																)
 															)
 														)
 													),
 													UI_REF(
-														UI_BOX(INHERIT_PARENT, INHERIT_PARENT, ALIGN_MIDDLE, ALIGN_MIDDLE,
+														UI_BOX(INHERIT_PARENT, INHERIT_PARENT, ALIGN_MIDDLE, ALIGN_MIDDLE, 0,
 															UI_REF(color_rgb)
 														)
 													),
@@ -1981,7 +2028,7 @@ static struct List settings = UI_LIST(1,
 											)
 										),
 										UI_REF(
-											UI_BOX(20, INHERIT_PARENT, ALIGN_MIDDLE, ALIGN_MIDDLE,
+											UI_BOX(20, 100, ALIGN_MIDDLE, ALIGN_MIDDLE, 0,
 												UI_REF(
 													UI_SLIDER_GRADIENT(0, 0xffff00, 0x00ff00, .on_changed = ui_color_picker_rgg_changed)
 												)
@@ -1991,18 +2038,27 @@ static struct List settings = UI_LIST(1,
 								)
 							),
 							UI_REF(
-								UI_BOX(INHERIT_PARENT, 20, ALIGN_MIDDLE, ALIGN_MIDDLE,
+								UI_BOX(INHERIT_CHILD, 20, ALIGN_MIDDLE, ALIGN_MIDDLE, 0,
 									UI_REF(
-										UI_LIST(1,
+										UI_LIST(1, 4,
 											UI_CHILDREN(
-												UI_REF(brush_color[2]),
+												UI_REF(UI_COLOR_BOX(20, 20, 0x0000ff, .on_click = ui_brush_color_set)),
 												UI_REF(
-													UI_SLIDER_GRADIENT(1, 0x0000ff, 0x00ffff, .on_changed = ui_color_picker_bgb_changed)
+													UI_BOX(100, 20, ALIGN_BEGIN, ALIGN_BEGIN, 0,
+														UI_REF(
+															UI_SLIDER_GRADIENT(1, 0x0000ff, 0x00ffff, .on_changed = ui_color_picker_bgb_changed)
+														)
+													)
 												),
+												UI_REF(UI_COLOR_BOX(20, 20, 0x00ffff, .on_click = ui_brush_color_set)),
 												UI_REF(
-													UI_SLIDER_GRADIENT(1, 0x00ffff, 0x00ff00, .on_changed = ui_color_picker_gbg_changed)
+													UI_BOX(100, 20, ALIGN_BEGIN, ALIGN_BEGIN, 0,
+														UI_REF(
+															UI_SLIDER_GRADIENT(1, 0x00ffff, 0x00ff00, .on_changed = ui_color_picker_gbg_changed)
+														)
+													)
 												),
-												UI_REF(brush_color[3]),
+												UI_REF(UI_COLOR_BOX(20, 20, 0x00ff00, .on_click = ui_brush_color_set)),
 											)
 										)
 									)
@@ -2014,17 +2070,17 @@ static struct List settings = UI_LIST(1,
 			)
 		),
 		UI_REF(
-			UI_BOX(INHERIT_CHILD, INHERIT_CHILD, ALIGN_MIDDLE, ALIGN_MIDDLE,
+			UI_BOX(INHERIT_CHILD, INHERIT_CHILD, ALIGN_MIDDLE, ALIGN_MIDDLE, 0,
 				UI_REF(
-					UI_LIST(0,
+					UI_LIST(0, 4,
 						UI_CHILDREN(
 							UI_REF(
-								UI_BOX(INHERIT_PARENT, INHERIT_PARENT, ALIGN_MIDDLE, ALIGN_MIDDLE,
+								UI_BOX(INHERIT_PARENT, INHERIT_PARENT, ALIGN_MIDDLE, ALIGN_MIDDLE, 0,
 									UI_REF(settings_brush_circle)
 								)
 							),
 							UI_REF(
-								UI_BOX(50, INHERIT_CHILD, ALIGN_MIDDLE, ALIGN_MIDDLE,
+								UI_BOX(50, INHERIT_CHILD, ALIGN_MIDDLE, ALIGN_MIDDLE, 0,
 									UI_REF(settings_brush_text)
 								)
 							),
@@ -2034,14 +2090,14 @@ static struct List settings = UI_LIST(1,
 			)
 		),
 		UI_REF(
-			UI_BOX(30, INHERIT_PARENT, ALIGN_MIDDLE, ALIGN_MIDDLE,
+			UI_BOX(30, INHERIT_PARENT, ALIGN_MIDDLE, ALIGN_MIDDLE, 0,
 				UI_REF(UI_SLIDER(0, .on_changed = ui_brush_size_process_event))
 			)
 		),
 	)
 );
 
-struct List app = UI_LIST(0,
+struct List app = UI_LIST(0, 4,
 	UI_CHILDREN(
 		UI_REF(top_panel),
 		UI_REF(settings_expander),
