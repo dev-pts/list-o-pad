@@ -125,6 +125,11 @@ static struct Pair pair_unshift(struct Pair p1, struct Pair p2)
 	return p;
 }
 
+static int size_valid(struct Pair p)
+{
+	return p.w > 0 && p.h > 0;
+}
+
 struct Rect {
 	int x1;
 	int y1;
@@ -150,6 +155,17 @@ static struct Rect rect_from_size(struct Pair size)
 		.y1 = 0,
 		.x2 = size.w - 1,
 		.y2 = size.h - 1,
+	};
+	return rect;
+}
+
+static struct Rect rect_from_size_move(struct Pair size, struct Pair p)
+{
+	struct Rect rect = {
+		.x1 = p.x,
+		.y1 = p.y,
+		.x2 = p.x + size.w - 1,
+		.y2 = p.y + size.h - 1,
 	};
 	return rect;
 }
@@ -216,6 +232,11 @@ static int rect_valid(struct Rect r)
 static int rect_hit(struct Rect r, struct Pair p)
 {
 	return r.x1 <= p.x && p.x <= r.x2 && r.y1 <= p.y && p.y <= r.y2;
+}
+
+static int rect_equal(struct Rect r1, struct Rect r2)
+{
+	return memcmp(&r1, &r2, sizeof(struct Rect)) == 0;
 }
 
 static void rect_dump(struct Rect r)
@@ -519,8 +540,11 @@ enum EventActivateType {
 struct Base {
 	struct Base *parent;
 
-	/* Area you are supposed to draw */
+	struct Pair size;
+	struct Pair offset;
+
 	struct Rect vp;
+	struct Rect svp;
 
 	/* Parent may ask the element about its sizes.
 	 * You can only return INHERIT_PARENT or >= 0. */
@@ -533,12 +557,10 @@ struct Base {
 	void (*layout)(struct Base *obj, struct Pair size);
 	void (*layout_children)(struct Base *obj);
 
-	int valid;
-
 	/* vp is your vp but in absolute coordinates.
 	 * Please, respect the svp and dirty rect.
 	 */
-	void (*render)(struct Base *obj, struct Rect vp, struct Rect svp);
+	void (*render)(struct Base *obj, struct Rect svp);
 
 	/* Call before you are going to change the element.
 	 * Goes up to the parent, the parent sets the dirty region,
@@ -553,16 +575,14 @@ struct Base {
 	void (*handle_activate_event)(struct Base *base, enum EventActivateType type);
 
 	struct Base *next;
+
+	struct Base *rerender_next;
+	struct Rect dirty;
 };
 
 static struct Base *relayout;
+static struct Base *rerender;
 static struct Base *picked;
-static struct Pair picked_coord;
-
-static void ui_set_vp(struct Base *base, struct Rect vp)
-{
-	base->vp = vp;
-}
 
 static int layout_cnt;
 static int layout_enter_cnt;
@@ -577,37 +597,97 @@ static void ui_layout_child(struct Base *base, struct Base *child)
 	child->parent = base;
 
 	if (base) {
-		if (!rect_valid(base->vp)) {
+		if (!size_valid(base->size)) {
 			return;
 		}
 	}
 
-	if (!rect_valid(child->vp)) {
+	if (!size_valid(child->size)) {
 		return;
 	}
 
-	if (!child->valid) {
-		if (child->layout) {
-			child->layout(child, rect_size(child->vp));
-		}
-
-		child->valid = 1;
-		layout_cnt++;
+	if (child->layout) {
+		child->layout(child, child->size);
 	}
+
+	layout_cnt++;
 
 	if (child->layout_children) {
 		child->layout_children(child);
 	}
 }
 
+static void ui_process(struct Base *root)
+{
+	while (relayout) {
+		struct Base *base = relayout;
+
+		relayout = base->next;
+		base->next = NULL;
+
+		ui_layout_child(base->parent, base);
+	}
+
+	while (rerender) {
+		struct Base *base = rerender;
+
+		rerender = base->rerender_next;
+
+		draw_rect(base->dirty, 0x01579b);
+		if (!rect_equal(base->dirty, base->svp)) {
+			draw_rect(base->svp, 0x01579b);
+		}
+
+		root->render(root, base->dirty);
+		if (!rect_equal(base->dirty, base->svp)) {
+			root->render(root, base->svp);
+		}
+
+		base->rerender_next = NULL;
+	}
+}
+
+static void ui_update_dirty(struct Base *base)
+{
+	if (!rect_valid(base->svp)) {
+		return;
+	}
+
+	base->dirty = base->svp;
+
+	if (base->rerender_next || rerender == base) {
+		return;
+	}
+
+	base->rerender_next = rerender;
+	rerender = base;
+}
+
+static void ui_set_vp(struct Base *base, struct Base *child, struct Rect vp)
+{
+	struct Rect avp_new = rect_move(vp, base->offset);
+	struct Rect svp_new = rect_intersect(avp_new, base->svp);
+
+	if (!rect_valid(avp_new) || !rect_valid(svp_new)) {
+		memset(&child->size, 0, sizeof(child->size));
+		memset(&child->svp, 0, sizeof(child->svp));
+		return;
+	}
+
+	child->size = rect_size(vp);
+	child->offset = rect_coord(avp_new);
+	child->vp = avp_new;
+	child->svp = svp_new;
+}
+
 static void ui_invalidate(struct Base *base)
 {
 	struct Base *last = base;
 
+	ui_update_dirty(base);
+
 	while (base) {
 		last = base;
-
-		base->valid = 0;
 
 		if (base->invalidate) {
 			if (!base->invalidate(base)) {
@@ -618,64 +698,44 @@ static void ui_invalidate(struct Base *base)
 		base = base->parent;
 	}
 
-	if (relayout) {
-		last->next = relayout;
-	}
-
+	last->next = relayout;
 	relayout = last;
 }
 
-static void ui_render(struct Base *base, struct Rect vp, struct Rect svp)
+static void ui_render(struct Base *base, struct Rect svp)
 {
-	struct Pair offset = rect_coord(vp);
-
-	vp = rect_move(base->vp, offset);
-	svp = rect_intersect(vp, svp);
+	svp = rect_intersect(svp, base->svp);
 
 	if (!rect_valid(svp)) {
 		render_skip_cnt++;
 		return;
 	}
 
-	base->render(base, vp, svp);
+	base->render(base, svp);
 	render_cnt++;
 }
 
-static struct Base *ui_pick_child(struct Base *base, struct Base *child, struct Pair p)
+static struct Base *ui_pick_child(struct Base *base, struct Pair p)
 {
 	/* Don't want to be picked */
-	if (!child->pick) {
+	if (!base->pick) {
 		return NULL;
 	}
 
-	if (base) {
-		struct Rect svp = rect_intersect(rect_from_size(rect_size(base->vp)), child->vp);
-
-		if (!rect_valid(svp)) {
-			return NULL;
-		}
-
-		if (!rect_hit(svp, p)) {
-			return NULL;
-		}
-	} else {
-		if (!rect_valid(child->vp)) {
-			return NULL;
-		}
-
-		if (!rect_hit(child->vp, p)) {
-			return NULL;
-		}
+	if (!rect_valid(base->svp)) {
+		return NULL;
 	}
 
-	picked_coord = pair_shift(picked_coord, rect_coord(child->vp));
+	if (!rect_hit(base->svp, p)) {
+		return NULL;
+	}
 
-	return child->pick(child, pair_unshift(p, rect_coord(child->vp)));
+	return base->pick(base, p);
 }
 
 static void ui_handle_cursor_event(struct Base *base, enum EventCursorType type, struct Pair p)
 {
-	base->handle_cursor_event(base, type, pair_unshift(p, picked_coord));
+	base->handle_cursor_event(base, type, pair_unshift(p, base->offset));
 }
 
 static void ui_handle_activate_event(struct Base *base, enum EventActivateType type)
@@ -707,9 +767,7 @@ static void ui_cursor_down(struct Base *base, struct Pair p)
 {
 	struct Base *new_pick;
 
-	picked_coord = rect_coord(base->vp);
-
-	new_pick = ui_pick_child(NULL, base, p);
+	new_pick = ui_pick_child(base, p);
 
 	if (picked && picked != new_pick) {
 		ui_handle_activate_event(picked, EV_DEACTIVATE);
@@ -739,31 +797,13 @@ static void ui_cursor_up(struct Base *base, struct Pair p)
 
 	ui_handle_cursor_event(picked, EV_CURSOR_UP, p);
 
-	if (picked == ui_pick_child(NULL, base, p)) {
+	if (picked == ui_pick_child(base, p)) {
 		ui_handle_activate_event(picked, EV_ACTIVATE);
 	} else {
 		ui_handle_activate_event(picked, EV_CANCEL);
 	}
 
 	picked = NULL;
-}
-
-static void ui_process(struct Base *base, struct Rect screen)
-{
-	base->vp = screen;
-
-	while (relayout) {
-		struct Base *base = relayout;
-
-		relayout = base->next;
-		base->next = NULL;
-
-		ui_layout_child(NULL, base);
-	}
-
-	draw_rect(screen, 0x01579b);
-
-	base->render(base, screen, screen);
 }
 
 enum Align {
@@ -972,7 +1012,7 @@ static void ui_box_layout(struct Base *base, struct Pair size)
 
 	struct Rect vp = rect_from_size(content_size);
 
-	ui_set_vp(obj->content, rect_move(vp, ui_align(size, content_size, obj->h_align, obj->v_align)));
+	ui_set_vp(base, obj->content, rect_move(vp, ui_align(size, content_size, obj->h_align, obj->v_align)));
 }
 
 static void ui_box_layout_children(struct Base *base)
@@ -987,13 +1027,13 @@ static int ui_box_invalidate(struct Base *base)
 	struct Box *obj = (struct Box *)base;
 
 	if (obj->width == INHERIT_CHILD) {
-		if (ui_get_width(obj->content) != rect_width(base->vp)) {
+		if (ui_get_width(obj->content) != base->size.w) {
 			return 1;
 		}
 	}
 
 	if (obj->height == INHERIT_CHILD) {
-		if (ui_get_height(obj->content) != rect_height(base->vp)) {
+		if (ui_get_height(obj->content) != base->size.h) {
 			return 1;
 		}
 	}
@@ -1001,18 +1041,18 @@ static int ui_box_invalidate(struct Base *base)
 	return 0;
 }
 
-static void ui_box_render(struct Base *base, struct Rect vp, struct Rect svp)
+static void ui_box_render(struct Base *base, struct Rect svp)
 {
 	struct Box *obj = (struct Box *)base;
 
-	ui_render(obj->content, vp, svp);
+	ui_render(obj->content, svp);
 }
 
 static struct Base *ui_box_pick(struct Base *base, struct Pair p)
 {
 	struct Box *obj = (struct Box *)base;
 
-	return ui_pick_child(base, obj->content, p);
+	return ui_pick_child(obj->content, p);
 }
 
 static int ui_color_box_get_width(struct Base *base)
@@ -1029,18 +1069,18 @@ static int ui_color_box_get_height(struct Base *base)
 	return obj->height;
 }
 
-static void ui_color_box_render(struct Base *base, struct Rect vp, struct Rect svp)
+static void ui_color_box_render(struct Base *base, struct Rect svp)
 {
 	struct ColorBox *obj = (struct ColorBox *)base;
 
 	draw_rect(svp, obj->color);
 }
 
-static void ui_color_gradient_render(struct Base *base, struct Rect vp, struct Rect svp)
+static void ui_color_gradient_render(struct Base *base, struct Rect svp)
 {
 	struct GradientBox *obj = (struct GradientBox *)base;
 
-	draw_rect_gradient(vp, svp, obj->super.color, obj->color_end, obj->horizontal);
+	draw_rect_gradient(base->vp, svp, obj->super.color, obj->color_end, obj->horizontal);
 }
 
 static int ui_bitmap_get_width(struct Base *base)
@@ -1061,16 +1101,17 @@ static void ui_bitmap_layout(struct Base *base, struct Pair size)
 {
 	struct Bitmap *obj = (struct Bitmap *)base;
 
+	// FIXME Use normal child with ui_set_vp()
 	obj->offset = ui_align(size, obj->bc->bd[obj->index].bb, obj->h_align, obj->v_align);
 }
 
-static void ui_bitmap_render(struct Base *base, struct Rect vp, struct Rect svp)
+static void ui_bitmap_render(struct Base *base, struct Rect svp)
 {
 	struct Bitmap *obj = (struct Bitmap *)base;
 
 	draw_rect(svp, obj->bg_color);
 
-	draw_bitmap2(pair_shift(obj->offset, rect_coord(vp)), svp, obj->bc, obj->index, obj->color);
+	draw_bitmap2(pair_shift(obj->offset, rect_coord(base->vp)), svp, obj->bc, obj->index, obj->color);
 }
 
 static void ui_bitmap_handle_cursor_event(struct Base *base, enum EventCursorType type, struct Pair p)
@@ -1084,6 +1125,7 @@ static void ui_bitmap_handle_cursor_event(struct Base *base, enum EventCursorTyp
 		}
 
 		obj->super.bg_color = 0x4caf50;
+		ui_update_dirty(base);
 		break;
 	default:
 		break;
@@ -1124,6 +1166,7 @@ static void ui_bitmap_handle_activate_event(struct Base *base, enum EventActivat
 	case EV_CANCEL:
 		if (obj->type == UI_BUTTON_NORMAL || !obj->activated) {
 			obj->super.bg_color = 0x01579b;
+			ui_update_dirty(base);
 		}
 		break;
 	default:
@@ -1143,11 +1186,11 @@ static int ui_text_get_height(struct Base *base)
 	return FONT_H;
 }
 
-static void ui_text_render(struct Base *base, struct Rect vp, struct Rect svp)
+static void ui_text_render(struct Base *base, struct Rect svp)
 {
 	struct Text *obj = (struct Text *)base;
 
-	draw_text(vp, svp, obj->color, obj->text);
+	draw_text(base->vp, svp, obj->color, obj->text);
 }
 
 static void ui_slider_layout(struct Base *base, struct Pair size)
@@ -1187,7 +1230,7 @@ static void ui_slider_layout(struct Base *base, struct Pair size)
 			h = s;
 		}
 
-		ui_set_vp(obj->knob.c, rect_move(rect_new(0, 0, w - 1, h - 1), pair_new(x, size.h - 1 - y - obj->knob.size)));
+		ui_set_vp(base, obj->knob.c, rect_move(rect_new(0, 0, w - 1, h - 1), pair_new(x, size.h - 1 - y - obj->knob.size)));
 	}
 
 	{
@@ -1214,7 +1257,7 @@ static void ui_slider_layout(struct Base *base, struct Pair size)
 			h = obj->len;
 		}
 
-		ui_set_vp(obj->line.c, rect_move(rect_new(0, 0, w - 1, h - 1), pair_new(x, y + obj->knob.size / 2)));
+		ui_set_vp(base, obj->line.c, rect_move(rect_new(0, 0, w - 1, h - 1), pair_new(x, y + obj->knob.size / 2)));
 	}
 }
 
@@ -1226,12 +1269,13 @@ static void ui_slider_layout_children(struct Base *base)
 	ui_layout_child(base, obj->knob.c);
 }
 
-static void ui_slider_render(struct Base *base, struct Rect vp, struct Rect svp)
+static void ui_slider_render(struct Base *base, struct Rect svp)
 {
 	struct Slider *obj = (struct Slider *)base;
 
-	ui_render(obj->line.c, vp, svp);
-	ui_render(obj->knob.c, vp, svp);
+	ui_render(obj->line.c, svp);
+	// FIXME Make it separate Base
+	ui_render(obj->knob.c, svp);
 }
 
 static void ui_slider_handle_cursor_event(struct Base *base, enum EventCursorType type, struct Pair p)
@@ -1245,14 +1289,16 @@ static void ui_slider_handle_cursor_event(struct Base *base, enum EventCursorTyp
 		if (obj->horizontal) {
 			value = obj->min + (obj->max - obj->min) * (p.x - obj->knob.size / 2 - obj->frac) / obj->len;
 		} else {
-			value = obj->min + (obj->max - obj->min) * (rect_height(base->vp) - obj->knob.size - (p.y - obj->knob.size / 2 - obj->frac)) / obj->len;
+			value = obj->min + (obj->max - obj->min) * (base->size.h - obj->knob.size - (p.y - obj->knob.size / 2 - obj->frac)) / obj->len;
 		}
 
 		obj->value = CLAMP(value, obj->min, obj->max);
 
 		obj->on_changed(obj->value);
 
-		ui_invalidate(base);
+		if (obj->knob.size) {
+			ui_invalidate(base);
+		}
 		break;
 	default:
 		break;
@@ -1366,7 +1412,7 @@ static void ui_list_layout(struct Base *base, struct Pair size)
 			int _dim_size2 = c->_method2(c); \
 \
 			if (_dim_size == 0 || _dim_size2 == 0) { \
-				memset(&c->vp, 0, sizeof(c->vp)); \
+				ui_set_vp(base, c, rect_new(0, 0, 0, 0)); \
 				continue; \
 			} \
 \
@@ -1383,7 +1429,7 @@ static void ui_list_layout(struct Base *base, struct Pair size)
 				_dim_size2 = _size2; \
 			} \
 \
-			ui_set_vp(c, rect_move(rect_new(0, 0, width - 1, height - 1), pair_new(x, y))); \
+			ui_set_vp(base, c, rect_move(rect_new(0, 0, width - 1, height - 1), pair_new(x, y))); \
 \
 			_dim += _dim_size; \
 			_dim += obj->space; \
@@ -1410,14 +1456,14 @@ static void ui_list_layout_children(struct Base *base)
 	}
 }
 
-static void ui_list_render(struct Base *base, struct Rect vp, struct Rect svp)
+static void ui_list_render(struct Base *base, struct Rect svp)
 {
 	struct List *obj = (struct List *)base;
 
 	for (int i = 0; i < obj->children; i++) {
 		struct Base *c = obj->child[i];
 
-		ui_render(c, vp, svp);
+		ui_render(c, svp);
 	}
 }
 
@@ -1427,7 +1473,7 @@ static struct Base *ui_list_pick(struct Base *base, struct Pair p)
 
 	for (int i = 0; i < obj->children; i++) {
 		struct Base *c = obj->child[i];
-		struct Base *ret = ui_pick_child(base, c, p);
+		struct Base *ret = ui_pick_child(c, p);
 
 		if (ret) {
 			return ret;
@@ -1450,11 +1496,11 @@ static int ui_circle_get_height(struct Base *base)
 	return obj->radius * 2 + 1;
 }
 
-static void ui_circle_render(struct Base *base, struct Rect vp, struct Rect svp)
+static void ui_circle_render(struct Base *base, struct Rect svp)
 {
 	struct Circle *obj = (struct Circle *)base;
 
-	draw_circle(svp, pair_new((vp.x1 + vp.x2) / 2, (vp.y1 + vp.y2) / 2), obj->radius, obj->color, 1);
+	draw_circle(svp, pair_new((base->vp.x1 + base->vp.x2) / 2, (base->vp.y1 + base->vp.y2) / 2), obj->radius, obj->color, 1);
 }
 
 #define UI_REF(child) ((struct Base *)&child)
@@ -1652,6 +1698,8 @@ static void ui_button_bitmap_tool_activate(struct Base *base)
 	for (int i = 0; i < ARRAY_SIZE(tool_group); i++) {
 		struct ButtonBitmap *tool = (struct ButtonBitmap *)tool_group[i];
 
+		ui_update_dirty(tool_group[i]);
+
 		if (tool_group[i] == base) {
 			continue;
 		}
@@ -1764,6 +1812,7 @@ static void ui_color_picker_changed(void)
 	g = (g * (100 - brush_color_saturation) + l * brush_color_saturation) / 100;
 	b = (b * (100 - brush_color_saturation) + l * brush_color_saturation) / 100;
 
+	// FIXME Move to Text? color_rgb->set_text("%d %d %d", r, g, b)?
 	snprintf(color_rgb_text, sizeof(color_rgb_text), "%d %d %d", r, g, b);
 
 	ui_invalidate(&color_rgb.base);
@@ -1772,12 +1821,17 @@ static void ui_color_picker_changed(void)
 
 	cv->color_end = (cas_r << 16) | (cas_g << 8) | cas_b;
 
+	ui_update_dirty(&cv->super.base);
+
 	struct GradientBox *cs = (struct GradientBox *)ui_color_picker_saturation.line.c;
 
 	cs->super.color = brush_color_hue;
 
+	ui_update_dirty(&cs->super.base);
+
 	for (int i = 0; i < ARRAY_SIZE(brush_color); i++) {
 		brush_color[i].color = (r << 16) | (g << 8) | b;
+		ui_update_dirty(&brush_color[i].base);
 	}
 }
 
@@ -2040,7 +2094,11 @@ int main()
 		return -1;
 	}
 
+	app.base.vp = app.base.svp = app.base.dirty = rect_new(0, 0, H_RES - 1, V_RES - 1);
+	app.base.size = rect_size(app.base.vp);
+
 	relayout = &app.base;
+	rerender = &app.base;
 
 	while (1) {
 		SDL_Event e;
@@ -2073,7 +2131,7 @@ int main()
 			render_skip_cnt = 0;
 
 			printf("--------------------------------\n");
-			ui_process(&app.base, rect_new(0, 0, H_RES - 1, V_RES - 1));
+			ui_process(&app.base);
 
 			printf("%i, %i, %i, %i\n", layout_enter_cnt, layout_cnt, render_cnt, render_skip_cnt);
 		}
