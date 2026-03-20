@@ -1657,11 +1657,11 @@ static void ui_circle_render(struct Base *base, struct Rect svp)
 		.min = 0, \
 		.max = 100, \
 		.line = { \
-			.size = -1, \
+			.size = 4, \
 			.c = UI_REF(UI_GRADIENT_BOX(INHERIT_PARENT, INHERIT_PARENT, _color_start, _color_end, _horizontal)), \
 		}, \
 		.knob = { \
-			.size = 4, \
+			.size = 1, \
 			.c = UI_REF(UI_COLOR_BOX(INHERIT_PARENT, INHERIT_PARENT, 0xeff4ff)), \
 		}, \
 		__VA_ARGS__ \
@@ -1887,8 +1887,16 @@ static void ui_color_picker_saturation_changed(int value)
 static void ui_brush_color_set(struct ColorBox *obj)
 {
 	brush_color_hue = obj->color;
+	brush_color_value = 100;
+	brush_color_saturation = 0;
+
+	ui_color_picker_value.value = 100;
+	ui_color_picker_saturation.value = 0;
 
 	ui_color_picker_changed();
+
+	ui_invalidate(&ui_color_picker_value.base);
+	ui_invalidate(&ui_color_picker_saturation.base);
 }
 
 static struct List settings = UI_LIST(1, 4,
@@ -1942,7 +1950,12 @@ static struct List settings = UI_LIST(1, 4,
 													UI_REF(
 														UI_BOX(INHERIT_PARENT, INHERIT_PARENT, ALIGN_MIDDLE, ALIGN_MIDDLE, 0,
 															UI_REF(
-																UI_COLOR_BOX(0, 0, 0)
+																UI_LIST(1, 4,
+																	UI_CHILDREN(
+																		UI_REF(UI_COLOR_BOX(20, 20, 0x000000, .on_click = ui_brush_color_set)),
+																		UI_REF(UI_COLOR_BOX(20, 20, 0xffffff, .on_click = ui_brush_color_set)),
+																	)
+																)
 															)
 														)
 													),
