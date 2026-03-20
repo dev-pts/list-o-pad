@@ -131,107 +131,59 @@ static int size_valid(struct Pair p)
 }
 
 struct Rect {
-	int x1;
-	int y1;
-	int x2;
-	int y2;
+	union {
+		struct {
+			int x;
+			int y;
+		};
+		struct Pair p;
+	};
+	union {
+		struct {
+			int w;
+			int h;
+		};
+		struct Pair s;
+	};
 };
 
-static struct Rect rect_new(int sx1, int sy1, int sx2, int sy2)
+static struct Rect rect_new(int x, int y, int w, int h)
 {
 	struct Rect rect = {
-		.x1 = sx1,
-		.y1 = sy1,
-		.x2 = sx2,
-		.y2 = sy2,
-	};
-	return rect;
-}
-
-static struct Rect rect_from_size(struct Pair size)
-{
-	struct Rect rect = {
-		.x1 = 0,
-		.y1 = 0,
-		.x2 = size.w - 1,
-		.y2 = size.h - 1,
-	};
-	return rect;
-}
-
-static struct Rect rect_from_size_move(struct Pair size, struct Pair p)
-{
-	struct Rect rect = {
-		.x1 = p.x,
-		.y1 = p.y,
-		.x2 = p.x + size.w - 1,
-		.y2 = p.y + size.h - 1,
+		.x = x,
+		.y = y,
+		.w = w,
+		.h = h,
 	};
 	return rect;
 }
 
 static struct Rect rect_move(struct Rect r, struct Pair p)
 {
-	struct Rect rect = {
-		.x1 = r.x1 + p.x,
-		.y1 = r.y1 + p.y,
-		.x2 = r.x2 + p.x,
-		.y2 = r.y2 + p.y,
-	};
-	return rect;
+	r.x += p.x;
+	r.y += p.y;
+	return r;
 }
 
 static struct Rect rect_intersect(struct Rect s, struct Rect r)
 {
 	struct Rect rect = {
-		.x1 = MAX(s.x1, r.x1),
-		.y1 = MAX(s.y1, r.y1),
-		.x2 = MIN(s.x2, r.x2),
-		.y2 = MIN(s.y2, r.y2),
+		.x = MAX(s.x, r.x),
+		.y = MAX(s.y, r.y),
 	};
+	rect.w = MIN(s.x + s.w, r.x + r.w) - rect.x;
+	rect.h = MIN(s.y + s.h, r.y + r.h) - rect.y;
 	return rect;
-}
-
-static struct Rect rect_union(struct Rect s, struct Rect r)
-{
-	struct Rect rect = {
-		.x1 = MIN(s.x1, r.x1),
-		.y1 = MIN(s.y1, r.y1),
-		.x2 = MAX(s.x2, r.x2),
-		.y2 = MAX(s.y2, r.y2),
-	};
-	return rect;
-}
-
-static int rect_width(struct Rect r)
-{
-	return r.x2 - r.x1 + 1;
-}
-
-static int rect_height(struct Rect r)
-{
-	return r.y2 - r.y1 + 1;
-}
-
-static struct Pair rect_size(struct Rect r)
-{
-	return pair_new(rect_width(r), rect_height(r));
-}
-
-static struct Pair rect_coord(struct Rect r)
-{
-	return pair_new(r.x1, r.y1);
 }
 
 static int rect_valid(struct Rect r)
 {
-	/* Line is not a rect, so it's <, and not <= */
-	return r.x1 < r.x2 && r.y1 < r.y2;
+	return size_valid(r.s);
 }
 
 static int rect_hit(struct Rect r, struct Pair p)
 {
-	return r.x1 <= p.x && p.x <= r.x2 && r.y1 <= p.y && p.y <= r.y2;
+	return r.x <= p.x && p.x < (r.x + r.w) && r.y <= p.y && p.y < (r.y + r.h);
 }
 
 static int rect_equal(struct Rect r1, struct Rect r2)
@@ -242,7 +194,7 @@ static int rect_equal(struct Rect r1, struct Rect r2)
 static void rect_dump(struct Rect r)
 {
 #ifndef FPGA
-	printf("%i, %i, %i, %i\n", r.x1, r.y1, r.x2, r.y2);
+	printf("%i, %i, %i, %i\n", r.x, r.y, r.w, r.h);
 #endif
 }
 
@@ -261,8 +213,8 @@ static void draw_rect(struct Rect r, uint32_t color)
 		return;
 	}
 
-	for (int i = r.y1; i <= r.y2; i++) {
-		for (int j = r.x1; j <= r.x2; j++) {
+	for (int i = r.y; i < r.y + r.h; i++) {
+		for (int j = r.x; j < r.x + r.w; j++) {
 			fb[i * H_RES + j] = color;
 		}
 	}
@@ -285,7 +237,7 @@ static void draw_rect_gradient(struct Rect r, struct Rect s, uint32_t color_star
 	int len_g = ABS(ce_g - cs_g);
 	int len_b = ABS(ce_b - cs_b);
 
-	int len = horizontal ? r.x2 - r.x1 : r.y2 - r.y1;
+	int len = horizontal ? r.w : r.h;
 
 	int slop_r = (len_r + len - 1) / len;
 	int diff_r = slop_r * len;
@@ -305,7 +257,7 @@ static void draw_rect_gradient(struct Rect r, struct Rect s, uint32_t color_star
 	}
 
 	if (horizontal) {
-		for (int i = r.y1; i <= r.y2; i++) {
+		for (int i = r.y; i < r.y + r.h; i++) {
 			int32_t cs_r2 = cs_r;
 			int32_t cs_g2 = cs_g;
 			int32_t cs_b2 = cs_b;
@@ -313,7 +265,7 @@ static void draw_rect_gradient(struct Rect r, struct Rect s, uint32_t color_star
 			int cnt_g = 0;
 			int cnt_b = 0;
 
-			for (int j = r.x1; j <= r.x2; j++) {
+			for (int j = r.x; j < r.x + r.w; j++) {
 				uint32_t color = (cs_r2 << 16) | (cs_g2 << 8) | (cs_b2 << 0);
 
 				draw_pixel_check(s, pair_new(j, i), color);
@@ -343,10 +295,10 @@ static void draw_rect_gradient(struct Rect r, struct Rect s, uint32_t color_star
 		int cnt_g = 0;
 		int cnt_b = 0;
 
-		for (int i = r.y1; i <= r.y2; i++) {
+		for (int i = r.y; i < r.y + r.h; i++) {
 			uint32_t color = (cs_r2 << 16) | (cs_g2 << 8) | (cs_b2 << 0);
 
-			for (int j = r.x1; j <= r.x2; j++) {
+			for (int j = r.x; j < r.x + r.w; j++) {
 				draw_pixel_check(s, pair_new(j, i), color);
 			}
 
@@ -433,20 +385,20 @@ struct BitmapClass {
  */
 static void draw_bitmap(struct Rect r, struct Rect s, uint32_t color, const uint8_t *bitmap)
 {
-	struct Rect offset = rect_move(rect_intersect(r, s), pair_new(-r.x1, -r.y1));
+	struct Rect offset = rect_move(rect_intersect(r, s), pair_new(-r.x, -r.y));
 
 	if (!rect_valid(offset)) {
 		return;
 	}
 
-	int w = (rect_width(r) + 7) / 8;
+	int w = (r.w + 7) / 8;
 
-	for (int i = offset.y1; i <= offset.y2; i++) {
-		for (int j = offset.x1; j <= offset.x2; j++) {
+	for (int i = offset.y; i < offset.y + offset.h; i++) {
+		for (int j = offset.x; j < offset.x + offset.w; j++) {
 			int idx = i * w * 8 + j;
 
 			if (bitmap[idx / 8] & ((uint8_t)0x80 >> (idx % 8))) {
-				struct Pair p = pair_new(r.x1 + j, r.y1 + i);
+				struct Pair p = pair_new(r.x + j, r.y + i);
 
 				fb[p.y * H_RES + p.x] = color;
 			}
@@ -457,7 +409,7 @@ static void draw_bitmap(struct Rect r, struct Rect s, uint32_t color, const uint
 static void draw_bitmap2(struct Pair pvp, struct Rect svp, struct BitmapClass *font, int index, uint32_t color)
 {
 	struct BitmapData *bd = &font->bd[index];
-	struct Rect offset = rect_intersect(rect_move(rect_new(0, 0, bd->bb.w - 1, bd->bb.h - 1), pvp), svp);
+	struct Rect offset = rect_intersect(rect_new(pvp.x, pvp.y, bd->bb.w, bd->bb.h), svp);
 
 	if (!rect_valid(offset)) {
 		return;
@@ -467,8 +419,8 @@ static void draw_bitmap2(struct Pair pvp, struct Rect svp, struct BitmapClass *f
 
 	int wi = (bd->bb.w + 7) / 8;
 
-	for (int i = offset.y1; i <= offset.y2; i++) {
-		for (int j = offset.x1; j <= offset.x2; j++) {
+	for (int i = offset.y; i < offset.y + offset.h; i++) {
+		for (int j = offset.x; j < offset.x + offset.w; j++) {
 			int idx = i * wi * 8 + j;
 
 			if (bd->data[idx / 8] & ((uint8_t)0x80 >> (idx % 8))) {
@@ -488,10 +440,10 @@ static void draw_shadow(struct Rect r, int cnt, int skip, uint32_t color)
 
 	int cy = cnt;
 
-	for (int i = r.y1; i <= r.y2; i++) {
+	for (int i = r.y; i < r.y + r.h; i++) {
 		int cx = cnt;
 
-		for (int j = r.x1; j <= r.x2; j++) {
+		for (int j = r.x; j < r.x + r.w; j++) {
 			fb[i * H_RES + j] = color;
 
 			cx--;
@@ -516,7 +468,7 @@ static void draw_text(struct Rect r, struct Rect s, uint32_t color, const char *
 	for (int k = 0; text[k]; k++) {
 		int idx = (int)text[k] * FONT_H * FONT_W / 8;
 
-		draw_bitmap(rect_move(rect_new(0, 0, FONT_W - 1, FONT_H - 1), pair_new(r.x1 + k * FONT_W, r.y1)), s, color, &font[idx]);
+		draw_bitmap(rect_new(r.x + k * FONT_W, r.y, FONT_W, FONT_H), s, color, &font[idx]);
 	}
 }
 
@@ -539,9 +491,6 @@ enum EventActivateType {
 
 struct Base {
 	struct Base *parent;
-
-	struct Pair size;
-	struct Pair offset;
 
 	struct Rect vp;
 	struct Rect svp;
@@ -597,17 +546,17 @@ static void ui_layout_child(struct Base *base, struct Base *child)
 	child->parent = base;
 
 	if (base) {
-		if (!size_valid(base->size)) {
+		if (!rect_valid(base->vp)) {
 			return;
 		}
 	}
 
-	if (!size_valid(child->size)) {
+	if (!rect_valid(child->vp)) {
 		return;
 	}
 
 	if (child->layout) {
-		child->layout(child, child->size);
+		child->layout(child, child->vp.s);
 	}
 
 	layout_cnt++;
@@ -665,17 +614,15 @@ static void ui_update_dirty(struct Base *base)
 
 static void ui_set_vp(struct Base *base, struct Base *child, struct Rect vp)
 {
-	struct Rect avp_new = rect_move(vp, base->offset);
+	struct Rect avp_new = rect_move(vp, base->vp.p);
 	struct Rect svp_new = rect_intersect(avp_new, base->svp);
 
 	if (!rect_valid(avp_new) || !rect_valid(svp_new)) {
-		memset(&child->size, 0, sizeof(child->size));
+		memset(&child->vp, 0, sizeof(child->vp));
 		memset(&child->svp, 0, sizeof(child->svp));
 		return;
 	}
 
-	child->size = rect_size(vp);
-	child->offset = rect_coord(avp_new);
 	child->vp = avp_new;
 	child->svp = svp_new;
 }
@@ -739,7 +686,7 @@ static void ui_handle_cursor_event(struct Base *base, enum EventCursorType type,
 		return;
 	}
 
-	base->handle_cursor_event(base, type, pair_unshift(p, base->offset));
+	base->handle_cursor_event(base, type, pair_unshift(p, base->vp.p));
 }
 
 static void ui_handle_activate_event(struct Base *base, enum EventActivateType type)
@@ -1012,19 +959,17 @@ static int ui_box_get_height(struct Base *base)
 static void ui_box_layout(struct Base *base, struct Pair size)
 {
 	struct Box *obj = (struct Box *)base;
-	struct Pair content_size = pair_new(ui_get_width(obj->content), ui_get_height(obj->content));
+	struct Rect vp = rect_new(0, 0, ui_get_width(obj->content), ui_get_height(obj->content));
 
-	if (content_size.w < 0) {
-		content_size.w = size.w;
+	if (vp.w < 0) {
+		vp.w = size.w;
 	}
 
-	if (content_size.h < 0) {
-		content_size.h = size.h;
+	if (vp.h < 0) {
+		vp.h = size.h;
 	}
 
-	struct Rect vp = rect_from_size(content_size);
-
-	ui_set_vp(base, obj->content, rect_move(vp, ui_align(size, content_size, obj->h_align, obj->v_align)));
+	ui_set_vp(base, obj->content, rect_move(vp, ui_align(size, vp.s, obj->h_align, obj->v_align)));
 }
 
 static void ui_box_layout_children(struct Base *base)
@@ -1039,13 +984,13 @@ static int ui_box_invalidate(struct Base *base)
 	struct Box *obj = (struct Box *)base;
 
 	if (obj->width == INHERIT_CHILD) {
-		if (ui_get_width(obj->content) != base->size.w) {
+		if (ui_get_width(obj->content) != base->vp.w) {
 			return 1;
 		}
 	}
 
 	if (obj->height == INHERIT_CHILD) {
-		if (ui_get_height(obj->content) != base->size.h) {
+		if (ui_get_height(obj->content) != base->vp.h) {
 			return 1;
 		}
 	}
@@ -1142,7 +1087,7 @@ static void ui_bitmap_render(struct Base *base, struct Rect svp)
 
 	draw_rect(svp, obj->bg_color);
 
-	draw_bitmap2(pair_shift(obj->offset, rect_coord(base->vp)), svp, obj->bc, obj->index, obj->color);
+	draw_bitmap2(pair_shift(obj->offset, base->vp.p), svp, obj->bc, obj->index, obj->color);
 }
 
 static void ui_bitmap_handle_cursor_event(struct Base *base, enum EventCursorType type, struct Pair p)
@@ -1229,9 +1174,9 @@ static void ui_slider_layout(struct Base *base, struct Pair size)
 	struct Slider *obj = (struct Slider *)base;
 
 	if (obj->horizontal) {
-		obj->len = size.w - 1;
+		obj->len = size.w;
 	} else {
-		obj->len = size.h - 1;
+		obj->len = size.h;
 	}
 
 	obj->len -= obj->knob.size;
@@ -1258,10 +1203,11 @@ static void ui_slider_layout(struct Base *base, struct Pair size)
 			w = s;
 		} else {
 			y = (obj->value - obj->min) * obj->len / (obj->max - obj->min);
+			y = size.h - y - obj->knob.size;
 			h = s;
 		}
 
-		ui_set_vp(base, obj->knob.c, rect_move(rect_new(0, 0, w - 1, h - 1), pair_new(x, size.h - 1 - y - obj->knob.size)));
+		ui_set_vp(base, obj->knob.c, rect_new(x, y, w, h));
 	}
 
 	{
@@ -1284,11 +1230,12 @@ static void ui_slider_layout(struct Base *base, struct Pair size)
 			h = s;
 		} else {
 			x = (w - s) / 2;
+			y += obj->knob.size / 2;
 			w = s;
 			h = obj->len;
 		}
 
-		ui_set_vp(base, obj->line.c, rect_move(rect_new(0, 0, w - 1, h - 1), pair_new(x, y + obj->knob.size / 2)));
+		ui_set_vp(base, obj->line.c, rect_new(x, y, w, h));
 	}
 }
 
@@ -1320,7 +1267,7 @@ static void ui_slider_handle_cursor_event(struct Base *base, enum EventCursorTyp
 		if (obj->horizontal) {
 			value = obj->min + (obj->max - obj->min) * (p.x - obj->knob.size / 2 - obj->frac) / obj->len;
 		} else {
-			value = obj->min + (obj->max - obj->min) * (base->size.h - obj->knob.size - (p.y - obj->knob.size / 2 - obj->frac)) / obj->len;
+			value = obj->min + (obj->max - obj->min) * (base->vp.h - obj->knob.size - (p.y - obj->knob.size / 2 - obj->frac)) / obj->len;
 		}
 
 		obj->value = CLAMP(value, obj->min, obj->max);
@@ -1468,7 +1415,7 @@ static void ui_list_layout(struct Base *base, struct Pair size)
 				_dim_size2 = _size2; \
 			} \
 \
-			ui_set_vp(base, c, rect_move(rect_new(0, 0, width - 1, height - 1), pair_new(x, y))); \
+			ui_set_vp(base, c, rect_new(x, y, width, height)); \
 \
 			_dim += _dim_size; \
 			_dim += obj->space; \
@@ -1539,7 +1486,7 @@ static void ui_circle_render(struct Base *base, struct Rect svp)
 {
 	struct Circle *obj = (struct Circle *)base;
 
-	draw_circle(svp, pair_new((base->vp.x1 + base->vp.x2) / 2, (base->vp.y1 + base->vp.y2) / 2), obj->radius, obj->color, 1);
+	draw_circle(svp, pair_new(base->vp.x + base->vp.w / 2, base->vp.y + base->vp.h / 2), obj->radius, obj->color, 1);
 }
 
 #define UI_REF(child) ((struct Base *)&child)
@@ -1714,7 +1661,7 @@ static void ui_circle_render(struct Base *base, struct Rect svp)
 			.c = UI_REF(UI_GRADIENT_BOX(INHERIT_PARENT, INHERIT_PARENT, _color_start, _color_end, _horizontal)), \
 		}, \
 		.knob = { \
-			.size = 0, \
+			.size = 4, \
 			.c = UI_REF(UI_COLOR_BOX(INHERIT_PARENT, INHERIT_PARENT, 0xeff4ff)), \
 		}, \
 		__VA_ARGS__ \
@@ -2162,8 +2109,7 @@ int main()
 		return -1;
 	}
 
-	app.base.vp = app.base.svp = app.base.dirty = rect_new(0, 0, H_RES - 1, V_RES - 1);
-	app.base.size = rect_size(app.base.vp);
+	app.base.vp = app.base.svp = app.base.dirty = rect_new(0, 0, H_RES, V_RES);
 
 	relayout = &app.base;
 	rerender = &app.base;
