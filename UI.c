@@ -823,6 +823,16 @@ enum UIButtonType {
 	UI_BUTTON_STICK,
 };
 
+struct Glyph {
+	struct Base base;
+
+	uint32_t bg_color;
+
+	struct BitmapClass *bc;
+	int index;
+	uint32_t color;
+};
+
 struct Bitmap {
 	struct Base base;
 
@@ -894,10 +904,11 @@ struct Slider {
 	int len;
 	int frac;
 
-	struct {
-		struct Base *c;
-		int size;
-	} knob, line;
+	struct Base *knob;
+	struct Base *line;
+
+	int ks;
+	int split;
 
 	void (*on_changed)(int value);
 };
@@ -1059,6 +1070,31 @@ static void ui_color_gradient_render(struct Base *base, struct Rect svp)
 	draw_rect_gradient(base->vp, svp, obj->super.color, obj->color_end, obj->horizontal);
 }
 
+static int ui_glyph_get_width(struct Base *base)
+{
+	struct Glyph *obj = (struct Glyph *)base;
+	struct BitmapData *bd = &obj->bc->bd[obj->index];
+
+	return bd->bb.w;
+}
+
+static int ui_glyph_get_height(struct Base *base)
+{
+	struct Glyph *obj = (struct Glyph *)base;
+	struct BitmapData *bd = &obj->bc->bd[obj->index];
+
+	return bd->bb.h;
+}
+
+static void ui_glyph_render(struct Base *base, struct Rect svp)
+{
+	struct Glyph *obj = (struct Glyph *)base;
+
+	draw_rect(svp, obj->bg_color);
+
+	draw_bitmap2(base->vp.p, svp, obj->bc, obj->index, obj->color);
+}
+
 static int ui_bitmap_get_width(struct Base *base)
 {
 	struct Bitmap *obj = (struct Bitmap *)base;
@@ -1172,70 +1208,123 @@ static void ui_text_render(struct Base *base, struct Rect svp)
 static void ui_slider_layout(struct Base *base, struct Pair size)
 {
 	struct Slider *obj = (struct Slider *)base;
+	int w = size.w;
+	int h = size.h;
+	int ks;
+	int ls;
+	int kw = ui_get_width(obj->knob);
+	int kh = ui_get_height(obj->knob);
 
 	if (obj->horizontal) {
+		ks = kw;
+		ls = ui_get_height(obj->line);
+
 		obj->len = size.w;
 	} else {
+		ks = kh;
+		ls = ui_get_width(obj->line);
+
 		obj->len = size.h;
 	}
 
-	obj->len -= obj->knob.size;
+	if (ks < 0) {
+		if (obj->horizontal) {
+			ks = h;
+		} else {
+			ks = w;
+		}
+	}
+
+	if (ls < 0) {
+		if (obj->horizontal) {
+			ls = h;
+		} else {
+			ls = w;
+		}
+	}
+
+	obj->len -= ks;
 	/* So that we have convenient ranges 1: [1, 1.5], 2: [1.5, 2.5], ... */
 	obj->frac = obj->len / (2 * (obj->max - obj->min));
+	obj->ks = ks;
 
 	{
-		int s = obj->knob.size;
 		int x = 0;
 		int y = 0;
 		int w = size.w;
 		int h = size.h;
-
-		if (s < 0) {
-			if (obj->horizontal) {
-				s = h;
-			} else {
-				s = w;
-			}
-		}
 
 		if (obj->horizontal) {
 			x = (obj->value - obj->min) * obj->len / (obj->max - obj->min);
-			w = s;
+			w = ks;
+
+			if (obj->split) {
+				h = kh;
+
+				if (obj->split > 0) {
+					y += size.h - kh;
+				}
+			}
 		} else {
 			y = (obj->value - obj->min) * obj->len / (obj->max - obj->min);
-			y = size.h - y - obj->knob.size;
-			h = s;
+			y = size.h - y - ks;
+			h = ks;
+
+			if (obj->split) {
+				w = kw;
+
+				if (obj->split > 0) {
+					x += size.w - kw;
+				}
+			}
 		}
 
-		ui_set_vp(base, obj->knob.c, rect_new(x, y, w, h));
+		ui_set_vp(base, obj->knob, rect_new(x, y, w, h));
 	}
 
 	{
-		int s = obj->line.size;
 		int x = 0;
 		int y = 0;
 		int w = size.w;
 		int h = size.h;
 
-		if (s < 0) {
-			if (obj->horizontal) {
-				s = h;
-			} else {
-				s = w;
-			}
-		}
-
 		if (obj->horizontal) {
-			y = (h - s) / 2;
-			h = s;
+			x += ks / 2;
+			y = (h - ls) / 2;
+
+			w = obj->len;
+			/* The most right position of the knob is x = obj->len, so... */
+			w++;
+
+			if (obj->split) {
+				h = size.h - kh;
+
+				if (obj->split < 0) {
+					y += kh;
+				}
+			} else {
+				h = ls;
+			}
 		} else {
-			x = (w - s) / 2;
-			y += obj->knob.size / 2;
-			w = s;
+			x = (w - ls) / 2;
+			y += ks / 2;
+
+			if (obj->split) {
+				w = size.w - kw;
+
+				if (obj->split < 0) {
+					x += kw;
+				}
+			} else {
+				w = ls;
+			}
+
 			h = obj->len;
+			/* The most right position of the knob is y = obj->len, so... */
+			h++;
 		}
 
-		ui_set_vp(base, obj->line.c, rect_new(x, y, w, h));
+		ui_set_vp(base, obj->line, rect_new(x, y, w, h));
 	}
 }
 
@@ -1243,17 +1332,16 @@ static void ui_slider_layout_children(struct Base *base)
 {
 	struct Slider *obj = (struct Slider *)base;
 
-	ui_layout_child(base, obj->line.c);
-	ui_layout_child(base, obj->knob.c);
+	ui_layout_child(base, obj->line);
+	ui_layout_child(base, obj->knob);
 }
 
 static void ui_slider_render(struct Base *base, struct Rect svp)
 {
 	struct Slider *obj = (struct Slider *)base;
 
-	ui_render(obj->line.c, svp);
-	// FIXME Make it separate Base
-	ui_render(obj->knob.c, svp);
+	ui_render(obj->line, svp);
+	ui_render(obj->knob, svp);
 }
 
 static void ui_slider_handle_cursor_event(struct Base *base, enum EventCursorType type, struct Pair p)
@@ -1265,16 +1353,16 @@ static void ui_slider_handle_cursor_event(struct Base *base, enum EventCursorTyp
 	case EV_CURSOR_DOWN:
 	case EV_CURSOR_MOVE:
 		if (obj->horizontal) {
-			value = obj->min + (obj->max - obj->min) * (p.x - obj->knob.size / 2 - obj->frac) / obj->len;
+			value = obj->min + (obj->max - obj->min) * (p.x - obj->ks / 2 - obj->frac) / obj->len;
 		} else {
-			value = obj->min + (obj->max - obj->min) * (base->vp.h - obj->knob.size - (p.y - obj->knob.size / 2 - obj->frac)) / obj->len;
+			value = obj->min + (obj->max - obj->min) * (base->vp.h - obj->ks - (p.y - obj->ks / 2 - obj->frac)) / obj->len;
 		}
 
 		obj->value = CLAMP(value, obj->min, obj->max);
 
 		obj->on_changed(obj->value);
 
-		if (obj->knob.size) {
+		if (obj->ks) {
 			ui_invalidate(base);
 		}
 		break;
@@ -1569,6 +1657,16 @@ static void ui_circle_render(struct Base *base, struct Rect svp)
 		__VA_ARGS__ \
 	}
 
+#define UI_GLYPH(...) \
+	(struct Glyph) { \
+		.base = { \
+			.get_width = ui_glyph_get_width, \
+			.get_height = ui_glyph_get_height, \
+			.render = ui_glyph_render, \
+		}, \
+		__VA_ARGS__ \
+	}
+
 #define UI_TEXT(_text) \
 	(struct Text) { \
 		.base = { \
@@ -1597,32 +1695,6 @@ static void ui_circle_render(struct Base *base, struct Rect svp)
 		.child = _children, \
 	}
 
-#define UI_SLIDER(_horizontal, ...) \
-	(struct Slider) { \
-		.base = { \
-			.get_width = ui_dummy_inherit_parent, \
-			.get_height = ui_dummy_inherit_parent, \
-			.layout = ui_slider_layout, \
-			.layout_children = ui_slider_layout_children, \
-			.render = ui_slider_render, \
-			.pick = ui_dummy_pick, \
-			.handle_cursor_event = ui_slider_handle_cursor_event, \
-		}, \
-		.horizontal = _horizontal, \
-		.value = 1, \
-		.min = 1, \
-		.max = 16, \
-		.line = { \
-			.size = 4, \
-			.c = UI_REF(UI_COLOR_BOX(INHERIT_PARENT, INHERIT_PARENT, 0)), \
-		}, \
-		.knob = { \
-			.size = 4, \
-			.c = UI_REF(UI_COLOR_BOX(INHERIT_PARENT, INHERIT_PARENT, 0xeff4ff)), \
-		}, \
-		__VA_ARGS__ \
-	}
-
 #define UI_CIRCLE(_radius, _color) \
 	(struct Circle) { \
 		.base = { \
@@ -1641,7 +1713,7 @@ static void ui_circle_render(struct Base *base, struct Rect svp)
 		.height = _height2, \
 	}
 
-#define UI_SLIDER_GRADIENT(_horizontal, _color_start, _color_end, ...) \
+#define UI_SLIDER(...) \
 	(struct Slider) { \
 		.base = { \
 			.get_width = ui_dummy_inherit_parent, \
@@ -1651,18 +1723,6 @@ static void ui_circle_render(struct Base *base, struct Rect svp)
 			.render = ui_slider_render, \
 			.pick = ui_dummy_pick, \
 			.handle_cursor_event = ui_slider_handle_cursor_event, \
-		}, \
-		.horizontal = _horizontal, \
-		.value = 0, \
-		.min = 0, \
-		.max = 100, \
-		.line = { \
-			.size = 4, \
-			.c = UI_REF(UI_GRADIENT_BOX(INHERIT_PARENT, INHERIT_PARENT, _color_start, _color_end, _horizontal)), \
-		}, \
-		.knob = { \
-			.size = 1, \
-			.c = UI_REF(UI_COLOR_BOX(INHERIT_PARENT, INHERIT_PARENT, 0xeff4ff)), \
 		}, \
 		__VA_ARGS__ \
 	}
@@ -1704,7 +1764,7 @@ static struct ButtonBitmap ui_button_bitmap_picker = UI_BUTTON_BITMAP(14, UI_BUT
 
 static struct List settings;
 
-static struct BoxExpander settings_expander = UI_BOX_EXPANDER(UI_BOX_RAW(0, 0, ALIGN_BEGIN, ALIGN_MIDDLE, 0, UI_REF(settings)), INHERIT_CHILD, INHERIT_CHILD);
+static struct BoxExpander settings_expander = UI_BOX_EXPANDER(UI_BOX_RAW(0, 0, ALIGN_BEGIN, ALIGN_MIDDLE, 0x01579b, UI_REF(settings)), INHERIT_CHILD, INHERIT_CHILD);
 
 static void ui_button_bitmap_settings_activate(struct Base *base);
 
@@ -1770,8 +1830,40 @@ static int brush_color_saturation = 0;
 static int brush_color_value = 100;
 static char color_rgb_text[12] = "255 255 255";
 static struct Text color_rgb = UI_TEXT(color_rgb_text);
-static struct Slider ui_color_picker_value = UI_SLIDER_GRADIENT(1, 0x000000, 0xff8800, .on_changed = ui_color_picker_value_changed);
-static struct Slider ui_color_picker_saturation = UI_SLIDER_GRADIENT(1, 0x884400, 0xffffff, .on_changed = ui_color_picker_saturation_changed);
+static struct Slider ui_color_picker_value = UI_SLIDER(
+	.horizontal = 1,
+	.split = 1,
+	.min = 0,
+	.max = 100,
+	.value = 0,
+	.line = UI_REF(UI_GRADIENT_BOX(INHERIT_PARENT, INHERIT_PARENT, 0x000000, 0xff8800, 1)),
+	.knob = UI_REF(
+		UI_GLYPH(
+			.bc = &icon,
+			.index = 15,
+			.color = 0xeff4ff,
+			.bg_color = 0,
+		)
+	),
+	.on_changed = ui_color_picker_value_changed,
+);
+static struct Slider ui_color_picker_saturation = UI_SLIDER(
+	.horizontal = 1,
+	.split = 1,
+	.min = 0,
+	.max = 100,
+	.value = 0,
+	.line = UI_REF(UI_GRADIENT_BOX(INHERIT_PARENT, INHERIT_PARENT, 0x884400, 0xffffff, 1)),
+	.knob = UI_REF(
+		UI_GLYPH(
+			.bc = &icon,
+			.index = 15,
+			.color = 0xeff4ff,
+			.bg_color = 0,
+		)
+	),
+	.on_changed = ui_color_picker_saturation_changed,
+);
 
 static struct ColorBox brush_color = UI_COLOR_BOX(INHERIT_PARENT, INHERIT_PARENT, 0xeff4ff);
 
@@ -1800,13 +1892,13 @@ static void ui_color_picker_changed(void)
 
 	ui_invalidate(&color_rgb.base);
 
-	struct GradientBox *cv = (struct GradientBox *)ui_color_picker_value.line.c;
+	struct GradientBox *cv = (struct GradientBox *)ui_color_picker_value.line;
 
 	cv->color_end = (cas_r << 16) | (cas_g << 8) | cas_b;
 
 	ui_update_dirty(&cv->super.base);
 
-	struct GradientBox *cs = (struct GradientBox *)ui_color_picker_saturation.line.c;
+	struct GradientBox *cs = (struct GradientBox *)ui_color_picker_saturation.line;
 
 	cs->super.color = brush_color_hue;
 
@@ -1916,7 +2008,23 @@ static struct List settings = UI_LIST(1, 4,
 												UI_REF(
 													UI_BOX(100, 20, ALIGN_BEGIN, ALIGN_BEGIN, 0,
 														UI_REF(
-															UI_SLIDER_GRADIENT(1, 0xff00ff, 0xff0000, .on_changed = ui_color_picker_rbr_changed)
+															UI_SLIDER(
+																.horizontal = 1,
+																.split = 1,
+																.min = 0,
+																.max = 100,
+																.value = 0,
+																.line = UI_REF(UI_GRADIENT_BOX(INHERIT_PARENT, INHERIT_PARENT, 0xff00ff, 0xff0000, 1)),
+																.knob = UI_REF(
+																	UI_GLYPH(
+																		.bc = &icon,
+																		.index = 15,
+																		.color = 0xeff4ff,
+																		.bg_color = 0,
+																	)
+																),
+																.on_changed = ui_color_picker_rbr_changed,
+															)
 														)
 													)
 												),
@@ -1924,7 +2032,23 @@ static struct List settings = UI_LIST(1, 4,
 												UI_REF(
 													UI_BOX(100, 20, ALIGN_BEGIN, ALIGN_BEGIN, 0,
 														UI_REF(
-															UI_SLIDER_GRADIENT(1, 0xff0000, 0xffff00, .on_changed = ui_color_picker_rrg_changed)
+															UI_SLIDER(
+																.horizontal = 1,
+																.split = 1,
+																.min = 0,
+																.max = 100,
+																.value = 0,
+																.line = UI_REF(UI_GRADIENT_BOX(INHERIT_PARENT, INHERIT_PARENT, 0xff0000, 0xffff00, 1)),
+																.knob = UI_REF(
+																	UI_GLYPH(
+																		.bc = &icon,
+																		.index = 15,
+																		.color = 0xeff4ff,
+																		.bg_color = 0,
+																	)
+																),
+																.on_changed = ui_color_picker_rrg_changed,
+															)
 														)
 													)
 												),
@@ -1940,7 +2064,23 @@ static struct List settings = UI_LIST(1, 4,
 										UI_REF(
 											UI_BOX(20, 100, ALIGN_MIDDLE, ALIGN_MIDDLE, 0,
 												UI_REF(
-													UI_SLIDER_GRADIENT(0, 0xff00ff, 0x0000ff, .on_changed = ui_color_picker_rbb_changed)
+													UI_SLIDER(
+														.horizontal = 0,
+														.split = 1,
+														.min = 0,
+														.max = 100,
+														.value = 0,
+														.line = UI_REF(UI_GRADIENT_BOX(INHERIT_PARENT, INHERIT_PARENT, 0xff00ff, 0x0000ff, 0)),
+														.knob = UI_REF(
+															UI_GLYPH(
+																.bc = &icon,
+																.index = 18,
+																.color = 0xeff4ff,
+																.bg_color = 0,
+															)
+														),
+														.on_changed = ui_color_picker_rbb_changed,
+													)
 												)
 											)
 										),
@@ -1990,7 +2130,23 @@ static struct List settings = UI_LIST(1, 4,
 										UI_REF(
 											UI_BOX(20, 100, ALIGN_MIDDLE, ALIGN_MIDDLE, 0,
 												UI_REF(
-													UI_SLIDER_GRADIENT(0, 0xffff00, 0x00ff00, .on_changed = ui_color_picker_rgg_changed)
+													UI_SLIDER(
+														.horizontal = 0,
+														.split = -1,
+														.min = 0,
+														.max = 100,
+														.value = 0,
+														.line = UI_REF(UI_GRADIENT_BOX(INHERIT_PARENT, INHERIT_PARENT, 0xffff00, 0x00ff00, 0)),
+														.knob = UI_REF(
+															UI_GLYPH(
+																.bc = &icon,
+																.index = 16,
+																.color = 0xeff4ff,
+																.bg_color = 0,
+															)
+														),
+														.on_changed = ui_color_picker_rgg_changed,
+													)
 												)
 											)
 										),
@@ -2006,7 +2162,23 @@ static struct List settings = UI_LIST(1, 4,
 												UI_REF(
 													UI_BOX(100, 20, ALIGN_BEGIN, ALIGN_BEGIN, 0,
 														UI_REF(
-															UI_SLIDER_GRADIENT(1, 0x0000ff, 0x00ffff, .on_changed = ui_color_picker_bgb_changed)
+															UI_SLIDER(
+																.horizontal = 1,
+																.split = -1,
+																.min = 0,
+																.max = 100,
+																.value = 0,
+																.line = UI_REF(UI_GRADIENT_BOX(INHERIT_PARENT, INHERIT_PARENT, 0x0000ff, 0x00ffff, 1)),
+																.knob = UI_REF(
+																	UI_GLYPH(
+																		.bc = &icon,
+																		.index = 17,
+																		.color = 0xeff4ff,
+																		.bg_color = 0,
+																	)
+																),
+																.on_changed = ui_color_picker_bgb_changed,
+															)
 														)
 													)
 												),
@@ -2014,7 +2186,23 @@ static struct List settings = UI_LIST(1, 4,
 												UI_REF(
 													UI_BOX(100, 20, ALIGN_BEGIN, ALIGN_BEGIN, 0,
 														UI_REF(
-															UI_SLIDER_GRADIENT(1, 0x00ffff, 0x00ff00, .on_changed = ui_color_picker_gbg_changed)
+															UI_SLIDER(
+																.horizontal = 1,
+																.split = -1,
+																.min = 0,
+																.max = 100,
+																.value = 0,
+																.line = UI_REF(UI_GRADIENT_BOX(INHERIT_PARENT, INHERIT_PARENT, 0x00ffff, 0x00ff00, 1)),
+																.knob = UI_REF(
+																	UI_GLYPH(
+																		.bc = &icon,
+																		.index = 17,
+																		.color = 0xeff4ff,
+																		.bg_color = 0,
+																	)
+																),
+																.on_changed = ui_color_picker_gbg_changed,
+															)
 														)
 													)
 												),
@@ -2030,7 +2218,7 @@ static struct List settings = UI_LIST(1, 4,
 			)
 		),
 		UI_REF(
-			UI_BOX(INHERIT_CHILD, INHERIT_CHILD, ALIGN_MIDDLE, ALIGN_MIDDLE, 0,
+			UI_BOX(INHERIT_CHILD, INHERIT_CHILD, ALIGN_MIDDLE, ALIGN_MIDDLE, 0x01579b,
 				UI_REF(
 					UI_LIST(0, 4,
 						UI_CHILDREN(
@@ -2051,7 +2239,17 @@ static struct List settings = UI_LIST(1, 4,
 		),
 		UI_REF(
 			UI_BOX(30, INHERIT_PARENT, ALIGN_MIDDLE, ALIGN_MIDDLE, 0,
-				UI_REF(UI_SLIDER(0, .on_changed = ui_brush_size_process_event))
+				UI_REF(
+					UI_SLIDER(
+						.horizontal = 0,
+						.min = 1,
+						.max = 16,
+						.value = 1,
+						.line = UI_REF(UI_COLOR_BOX(4, INHERIT_PARENT, 0x4caf50)),
+						.knob = UI_REF(UI_COLOR_BOX(INHERIT_PARENT, 6, 0xeff4ff)),
+						.on_changed = ui_brush_size_process_event,
+					)
+				)
 			)
 		),
 	)
