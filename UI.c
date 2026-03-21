@@ -875,7 +875,8 @@ struct Text {
 	struct Base base;
 
 	uint8_t *font;
-	const char *text;
+	char *text;
+	int text_len;
 	uint32_t color;
 };
 
@@ -1196,6 +1197,17 @@ static void ui_bitmap_handle_activate_event(struct Base *base, enum EventActivat
 	default:
 		break;
 	}
+}
+
+static void ui_text_set(struct Text *obj, const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	vsnprintf(obj->text, obj->text_len, fmt, ap);
+	va_end(ap);
+
+	ui_invalidate(&obj->base);
 }
 
 static int ui_text_get_width(struct Base *base)
@@ -1689,6 +1701,7 @@ static void ui_circle_render(struct Base *base, struct Rect svp)
 		}, \
 		.font = font, \
 		.text = _text, \
+		.text_len = sizeof(_text), \
 		.color = 0xeff4ff, \
 	}
 
@@ -1904,10 +1917,7 @@ static void ui_color_picker_changed(void)
 	g = (g * (100 - brush_color_saturation) + l * brush_color_saturation) / 100;
 	b = (b * (100 - brush_color_saturation) + l * brush_color_saturation) / 100;
 
-	// FIXME Move to Text? color_rgb->set_text("%d %d %d", r, g, b)?
-	snprintf(color_rgb_text, sizeof(color_rgb_text), "%d %d %d", r, g, b);
-
-	ui_invalidate(&color_rgb.base);
+	ui_text_set(&color_rgb, "%d %d %d", r, g, b);
 
 	struct GradientBox *cv = (struct GradientBox *)ui_color_picker_value.line;
 
@@ -2302,10 +2312,8 @@ static void ui_brush_size_process_event(int value)
 
 	obj->radius = value;
 
-	snprintf(settings_brush_text_raw, sizeof(settings_brush_text_raw), "%d", obj->radius % 100);
-
 	ui_invalidate(&settings_brush_circle.base);
-	ui_invalidate(&settings_brush_text.base);
+	ui_text_set(&settings_brush_text, "%d", obj->radius % 100);
 }
 
 #ifndef FPGA
