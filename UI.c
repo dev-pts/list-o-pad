@@ -220,103 +220,116 @@ static void draw_rect(struct Rect r, uint32_t color)
 	}
 }
 
+struct Interpolator {
+	int s_start;
+	int s_end;
+	int s_len;
+	int v_start;
+	int v_len;
+	int value;
+
+	int slop;
+	int step;
+	int cnt;
+	int sign;
+};
+
+/* Interpolate [v_start, v_end] into [s_start, s_end] */
+static struct Interpolator interpolator_create(int v_start, int v_end, int s_start, int s_end)
+{
+	int len = s_end - s_start;
+
+	struct Interpolator obj = {
+		.s_start = s_start,
+		.s_end = s_end,
+		.s_len = len,
+		.v_start = v_start,
+		.value = v_start,
+		/* We are dividing by 2 to have even parts at the beginning and at the end */
+		.cnt = len / 2,
+		.sign = 1,
+	};
+
+	obj.v_len = v_end - v_start;
+	obj.slop = obj.v_len / len;
+	obj.step = obj.slop * len;
+
+	if (obj.v_len < 0) {
+		obj.v_len = -obj.v_len;
+		obj.step = -obj.step;
+		obj.sign = -1;
+	}
+
+	return obj;
+}
+
+static void interpolator_reset(struct Interpolator *obj)
+{
+	obj->value = obj->v_start;
+	obj->cnt = obj->s_len / 2;
+}
+
+static void interpolator_step(struct Interpolator *obj)
+{
+	obj->cnt += obj->v_len;
+
+	if (obj->cnt >= obj->s_len) {
+		obj->cnt -= obj->step;
+		obj->value += obj->slop;
+
+		/* Handle accumulated error */
+		if (obj->cnt >= obj->s_len) {
+			obj->cnt -= obj->s_len;
+			obj->value += obj->sign;
+		}
+	}
+}
+
+/* Map value from [s_start, s_end] to [v_start, v_end] */
+static int interpolator_get(struct Interpolator *obj, int t)
+{
+	return obj->v_start + (obj->v_len * (t - obj->s_start) + obj->s_len / 2) / obj->s_len * obj->sign;
+}
+
 static void draw_rect_gradient(struct Rect r, struct Rect s, uint32_t color_start, uint32_t color_end, int horizontal)
 {
 	if (!rect_valid(r)) {
 		return;
 	}
 
-	uint8_t cs_r = (color_start >> 16) & 0xff;
-	uint8_t cs_g = (color_start >> 8) & 0xff;
-	uint8_t cs_b = (color_start >> 0) & 0xff;
-	uint8_t ce_r = (color_end >> 16) & 0xff;
-	uint8_t ce_g = (color_end >> 8) & 0xff;
-	uint8_t ce_b = (color_end >> 0) & 0xff;
+	int end = (horizontal ? r.w : r.h) - 1;
 
-	int len_r = ABS(ce_r - cs_r);
-	int len_g = ABS(ce_g - cs_g);
-	int len_b = ABS(ce_b - cs_b);
-
-	int len = horizontal ? r.w : r.h;
-
-	int slop_r = (len_r + len - 1) / len;
-	int diff_r = slop_r * len;
-	int slop_g = (len_g + len - 1) / len;
-	int diff_g = slop_g * len;
-	int slop_b = (len_b + len - 1) / len;
-	int diff_b = slop_b * len;
-
-	if (ce_r < cs_r) {
-		slop_r = -slop_r;
-	}
-	if (ce_g < cs_g) {
-		slop_g = -slop_g;
-	}
-	if (ce_b < cs_b) {
-		slop_b = -slop_b;
-	}
+	struct Interpolator i_r = interpolator_create((color_start >> 16) & 0xff, (color_end >> 16) & 0xff, 0, end);
+	struct Interpolator i_g = interpolator_create((color_start >> 8) & 0xff, (color_end >> 8) & 0xff, 0, end);
+	struct Interpolator i_b = interpolator_create((color_start >> 0) & 0xff, (color_end >> 0) & 0xff, 0, end);
 
 	if (horizontal) {
 		for (int i = r.y; i < r.y + r.h; i++) {
-			int32_t cs_r2 = cs_r;
-			int32_t cs_g2 = cs_g;
-			int32_t cs_b2 = cs_b;
-			int cnt_r = 0;
-			int cnt_g = 0;
-			int cnt_b = 0;
-
 			for (int j = r.x; j < r.x + r.w; j++) {
-				uint32_t color = (cs_r2 << 16) | (cs_g2 << 8) | (cs_b2 << 0);
+				uint32_t color = (i_r.value << 16) | (i_g.value << 8) | (i_b.value << 0);
 
 				draw_pixel_check(s, pair_new(j, i), color);
 
-				cnt_r += len_r;
-				if (cnt_r >= len) {
-					cnt_r -= diff_r;
-					cs_r2 = CLAMP(cs_r2 + slop_r, 0, 255);
-				}
-				cnt_g += len_g;
-				if (cnt_g >= len) {
-					cnt_g -= diff_g;
-					cs_g2 = CLAMP(cs_g2 + slop_g, 0, 255);
-				}
-				cnt_b += len_b;
-				if (cnt_b >= len) {
-					cnt_b -= diff_b;
-					cs_b2 = CLAMP(cs_b2 + slop_b, 0, 255);
-				}
+				interpolator_step(&i_r);
+				interpolator_step(&i_g);
+				interpolator_step(&i_b);
 			}
+
+			interpolator_reset(&i_r);
+			interpolator_reset(&i_g);
+			interpolator_reset(&i_b);
 		}
 	} else {
-		int32_t cs_r2 = cs_r;
-		int32_t cs_g2 = cs_g;
-		int32_t cs_b2 = cs_b;
-		int cnt_r = 0;
-		int cnt_g = 0;
-		int cnt_b = 0;
-
 		for (int i = r.y; i < r.y + r.h; i++) {
-			uint32_t color = (cs_r2 << 16) | (cs_g2 << 8) | (cs_b2 << 0);
+			uint32_t color = (i_r.value << 16) | (i_g.value << 8) | (i_b.value << 0);
 
 			for (int j = r.x; j < r.x + r.w; j++) {
 				draw_pixel_check(s, pair_new(j, i), color);
 			}
 
-			cnt_r += len_r;
-			if (cnt_r >= len) {
-				cnt_r -= diff_r;
-				cs_r2 = CLAMP(cs_r2 + slop_r, 0, 255);
-			}
-			cnt_g += len_g;
-			if (cnt_g >= len) {
-				cnt_g -= diff_g;
-				cs_g2 = CLAMP(cs_g2 + slop_g, 0, 255);
-			}
-			cnt_b += len_b;
-			if (cnt_b >= len) {
-				cnt_b -= diff_b;
-				cs_b2 = CLAMP(cs_b2 + slop_b, 0, 255);
-			}
+			interpolator_step(&i_r);
+			interpolator_step(&i_g);
+			interpolator_step(&i_b);
 		}
 	}
 }
@@ -902,7 +915,6 @@ struct Slider {
 	int value;
 
 	int len;
-	int frac;
 
 	struct Base *knob;
 	struct Base *line;
@@ -1244,18 +1256,18 @@ static void ui_slider_layout(struct Base *base, struct Pair size)
 	}
 
 	obj->len -= ks;
-	/* So that we have convenient ranges 1: [1, 1.5], 2: [1.5, 2.5], ... */
-	obj->frac = obj->len / (2 * (obj->max - obj->min));
 	obj->ks = ks;
 
 	{
+		struct Interpolator ir = interpolator_create(0, obj->len, obj->min, obj->max);
+		int point = interpolator_get(&ir, obj->value);
 		int x = 0;
 		int y = 0;
 		int w = size.w;
 		int h = size.h;
 
 		if (obj->horizontal) {
-			x = (obj->value - obj->min) * obj->len / (obj->max - obj->min);
+			x = point;
 			w = ks;
 
 			if (obj->split) {
@@ -1266,7 +1278,7 @@ static void ui_slider_layout(struct Base *base, struct Pair size)
 				}
 			}
 		} else {
-			y = (obj->value - obj->min) * obj->len / (obj->max - obj->min);
+			y = point;
 			y = size.h - y - ks;
 			h = ks;
 
@@ -1347,18 +1359,19 @@ static void ui_slider_render(struct Base *base, struct Rect svp)
 static void ui_slider_handle_cursor_event(struct Base *base, enum EventCursorType type, struct Pair p)
 {
 	struct Slider *obj = (struct Slider *)base;
-	int value;
+	struct Interpolator ir = interpolator_create(obj->min, obj->max, 0, obj->len);
+	int point;
 
 	switch (type) {
 	case EV_CURSOR_DOWN:
 	case EV_CURSOR_MOVE:
 		if (obj->horizontal) {
-			value = obj->min + (obj->max - obj->min) * (p.x - obj->ks / 2 - obj->frac) / obj->len;
+			point = p.x - obj->ks / 2;
 		} else {
-			value = obj->min + (obj->max - obj->min) * (base->vp.h - obj->ks - (p.y - obj->ks / 2 - obj->frac)) / obj->len;
+			point = base->vp.h - obj->ks - (p.y - obj->ks / 2);
 		}
 
-		obj->value = CLAMP(value, obj->min, obj->max);
+		obj->value = interpolator_get(&ir, CLAMP(point, 0, obj->len));
 
 		obj->on_changed(obj->value);
 
@@ -1791,7 +1804,7 @@ static struct List top_panel = UI_LIST(1, 4,
 					UI_LIST(1, 4,
 						UI_CHILDREN(
 							UI_REF(UI_BUTTON_BITMAP(8, UI_BUTTON_NORMAL)),
-							UI_REF(UI_BOX(INHERIT_CHILD, INHERIT_PARENT, ALIGN_MIDDLE, ALIGN_MIDDLE, 0x4caf50, UI_REF(UI_TEXT("007 / 101")))),
+							UI_REF(UI_BOX(100, INHERIT_PARENT, ALIGN_MIDDLE, ALIGN_MIDDLE, 0x4caf50, UI_REF(UI_TEXT("007 / 101")))),
 							UI_REF(UI_BUTTON_BITMAP(4, UI_BUTTON_NORMAL)),
 						)
 					)
@@ -1869,19 +1882,23 @@ static struct ColorBox brush_color = UI_COLOR_BOX(INHERIT_PARENT, INHERIT_PARENT
 
 static void ui_color_picker_changed(void)
 {
-	uint8_t r = (brush_color_hue >> 16) & 0xff;
-	uint8_t g = (brush_color_hue >> 8) & 0xff;
-	uint8_t b = (brush_color_hue >> 0) & 0xff;
+	uint8_t hr = (brush_color_hue >> 16) & 0xff;
+	uint8_t hg = (brush_color_hue >> 8) & 0xff;
+	uint8_t hb = (brush_color_hue >> 0) & 0xff;
 
-	uint32_t cas_r = CLAMP(r + 255 * brush_color_saturation / 100, 0, 255);
-	uint32_t cas_g = CLAMP(g + 255 * brush_color_saturation / 100, 0, 255);
-	uint32_t cas_b = CLAMP(b + 255 * brush_color_saturation / 100, 0, 255);
-
-	r = r * brush_color_value / 100;
-	g = g * brush_color_value / 100;
-	b = b * brush_color_value / 100;
+	uint32_t r = hr * brush_color_value / 100;
+	uint32_t g = hg * brush_color_value / 100;
+	uint32_t b = hb * brush_color_value / 100;
 
 	uint32_t l = MAX(MAX(r, g), b);
+
+	uint32_t l2 = MAX(MAX(hr, hg), hb);
+	uint32_t cas_r = (hr * (100 - brush_color_saturation) + l2 * brush_color_saturation) / 100;
+	uint32_t cas_g = (hg * (100 - brush_color_saturation) + l2 * brush_color_saturation) / 100;
+	uint32_t cas_b = (hb * (100 - brush_color_saturation) + l2 * brush_color_saturation) / 100;
+	uint32_t cav_r = r;
+	uint32_t cav_g = g;
+	uint32_t cav_b = b;
 
 	r = (r * (100 - brush_color_saturation) + l * brush_color_saturation) / 100;
 	g = (g * (100 - brush_color_saturation) + l * brush_color_saturation) / 100;
@@ -1900,7 +1917,8 @@ static void ui_color_picker_changed(void)
 
 	struct GradientBox *cs = (struct GradientBox *)ui_color_picker_saturation.line;
 
-	cs->super.color = brush_color_hue;
+	cs->super.color = (cav_r << 16) | (cav_g << 8) | cav_b;
+	cs->color_end = (l << 16) | (l << 8) | l;
 
 	ui_update_dirty(&cs->super.base);
 
