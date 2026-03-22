@@ -171,8 +171,8 @@ static struct Rect rect_intersect(struct Rect s, struct Rect r)
 		.x = MAX(s.x, r.x),
 		.y = MAX(s.y, r.y),
 	};
-	rect.w = MIN(s.x + s.w, r.x + r.w) - rect.x;
-	rect.h = MIN(s.y + s.h, r.y + r.h) - rect.y;
+	rect.w = MAX(MIN(s.x + s.w, r.x + r.w) - rect.x, 0);
+	rect.h = MAX(MIN(s.y + s.h, r.y + r.h) - rect.y, 0);
 	return rect;
 }
 
@@ -505,22 +505,36 @@ enum EventActivateType {
 struct Base {
 	struct Base *parent;
 
+	/* Local placement.
+	 * Useful, for example, for window with elements inside it,
+	 * and it moves - nothing inside it will be re-layouted,
+	 * only re-rendered. */
+	struct Rect lvp;
+	/* Placement in screen coordinates.
+	 * Rendering happens inside it (with respect to svp). */
 	struct Rect vp;
+	/* Viewport in screen coordinates.
+	 * The element can be partly seen or not seen at all.
+	 * svp is the actual viewing rect, and is used during rendering.
+	 * The picking also happens agains svp. */
 	struct Rect svp;
+
+	int valid;
 
 	/* Parent may ask the element about its sizes.
 	 * You can only return INHERIT_PARENT or >= 0. */
 	int (*get_width)(struct Base *obj);
 	int (*get_height)(struct Base *obj);
 
-	/* Parent assigns you the vp,
-	 * you just need to layout everything you want into the vp.
+	/* Parent assigns you the lvp,
+	 * you just need to layout everything you want into this lvp.
 	 */
 	void (*layout)(struct Base *obj, struct Pair size);
 	void (*layout_children)(struct Base *obj);
 
-	/* vp is your vp but in absolute coordinates.
-	 * Please, respect the svp and dirty rect.
+	/* Render everything you needed inside your vp
+	 * with respect to the svp argument.
+	 * Don't render outside this svp.
 	 */
 	void (*render)(struct Base *obj, struct Rect svp);
 
@@ -559,18 +573,24 @@ static void ui_layout_child(struct Base *base, struct Base *child)
 	child->parent = base;
 
 	if (base) {
-		if (!rect_valid(base->vp)) {
+		if (!rect_valid(base->lvp)) {
 			return;
 		}
 	}
 
-	if (!rect_valid(child->vp)) {
+	if (!rect_valid(child->lvp)) {
+		return;
+	}
+
+	if (child->valid) {
 		return;
 	}
 
 	if (child->layout) {
-		child->layout(child, child->vp.s);
+		child->layout(child, child->lvp.s);
 	}
+
+	child->valid = 1;
 
 	layout_cnt++;
 
@@ -587,7 +607,13 @@ static void ui_process(struct Base *root)
 		relayout = base->next;
 		base->next = NULL;
 
-		ui_layout_child(base->parent, base);
+		if (base->layout) {
+			base->layout(base, base->lvp.s);
+		}
+		if (base->layout_children) {
+			base->layout_children(base);
+		}
+		base->valid = 1;
 	}
 
 	while (rerender) {
@@ -625,9 +651,41 @@ static void ui_update_dirty(struct Base *base)
 	rerender = base;
 }
 
-static void ui_set_vp(struct Base *base, struct Base *child, struct Rect vp)
+static void ui_set_vp(struct Base *base, struct Rect vp)
 {
-	struct Rect avp_new = rect_move(vp, base->vp.p);
+	base->valid = rect_equal(base->lvp, vp);
+	base->lvp = vp;
+}
+
+static void ui_invalidate(struct Base *base)
+{
+	if (relayout != base && !base->next) {
+		base->next = relayout;
+		relayout = base;
+	}
+
+	ui_update_dirty(base);
+
+	while (base) {
+		base->valid = 0;
+
+		if ((base->invalidate && !base->invalidate(base)) || !base->parent) {
+			if (relayout == base || base->next) {
+				return;
+			}
+
+			base->next = relayout;
+			relayout = base;
+			return;
+		}
+
+		base = base->parent;
+	}
+}
+
+static void ui_render(struct Base *base, struct Base *child, struct Rect svp)
+{
+	struct Rect avp_new = rect_move(child->lvp, base->vp.p);
 	struct Rect svp_new = rect_intersect(avp_new, base->svp);
 
 	if (!rect_valid(avp_new) || !rect_valid(svp_new)) {
@@ -638,44 +696,19 @@ static void ui_set_vp(struct Base *base, struct Base *child, struct Rect vp)
 
 	child->vp = avp_new;
 	child->svp = svp_new;
-}
 
-static void ui_invalidate(struct Base *base)
-{
-	struct Base *last = base;
-
-	ui_update_dirty(base);
-
-	while (base) {
-		last = base;
-
-		if (base->invalidate) {
-			if (!base->invalidate(base)) {
-				break;
-			}
-		}
-
-		base = base->parent;
-	}
-
-	last->next = relayout;
-	relayout = last;
-}
-
-static void ui_render(struct Base *base, struct Rect svp)
-{
-	if (!base->render) {
+	if (!child->render) {
 		return;
 	}
 
-	svp = rect_intersect(svp, base->svp);
+	svp = rect_intersect(svp, child->svp);
 
 	if (!rect_valid(svp)) {
 		render_skip_cnt++;
 		return;
 	}
 
-	base->render(base, svp);
+	child->render(child, svp);
 	render_cnt++;
 }
 
@@ -1019,7 +1052,7 @@ static void ui_box_layout(struct Base *base, struct Pair size)
 		vp.h = size.h;
 	}
 
-	ui_set_vp(base, obj->content, rect_move(vp, ui_align(size, vp.s, obj->h_align, obj->v_align)));
+	ui_set_vp(obj->content, rect_move(vp, ui_align(size, vp.s, obj->h_align, obj->v_align)));
 }
 
 static void ui_box_layout_children(struct Base *base)
@@ -1054,7 +1087,7 @@ static void ui_box_render(struct Base *base, struct Rect svp)
 
 	draw_rect(svp, obj->color);
 
-	ui_render(obj->content, svp);
+	ui_render(base, obj->content, svp);
 }
 
 static struct Base *ui_box_pick(struct Base *base, struct Pair p)
@@ -1312,7 +1345,7 @@ static void ui_slider_layout(struct Base *base, struct Pair size)
 			}
 		}
 
-		ui_set_vp(base, obj->knob, rect_new(x, y, w, h));
+		ui_set_vp(obj->knob, rect_new(x, y, w, h));
 	}
 
 	{
@@ -1357,7 +1390,7 @@ static void ui_slider_layout(struct Base *base, struct Pair size)
 			h++;
 		}
 
-		ui_set_vp(base, obj->line, rect_new(x, y, w, h));
+		ui_set_vp(obj->line, rect_new(x, y, w, h));
 	}
 }
 
@@ -1373,8 +1406,8 @@ static void ui_slider_render(struct Base *base, struct Rect svp)
 {
 	struct Slider *obj = (struct Slider *)base;
 
-	ui_render(obj->line, svp);
-	ui_render(obj->knob, svp);
+	ui_render(base, obj->line, svp);
+	ui_render(base, obj->knob, svp);
 }
 
 static void ui_slider_handle_cursor_event(struct Base *base, enum EventCursorType type, struct Pair p)
@@ -1520,7 +1553,7 @@ static void ui_list_layout(struct Base *base, struct Pair size)
 			int _dim_size2 = c->_method2(c); \
 \
 			if (_dim_size == 0 || _dim_size2 == 0) { \
-				ui_set_vp(base, c, rect_new(0, 0, 0, 0)); \
+				ui_set_vp(c, rect_new(0, 0, 0, 0)); \
 				continue; \
 			} \
 \
@@ -1537,7 +1570,7 @@ static void ui_list_layout(struct Base *base, struct Pair size)
 				_dim_size2 = _size2; \
 			} \
 \
-			ui_set_vp(base, c, rect_new(x, y, width, height)); \
+			ui_set_vp(c, rect_new(x, y, width, height)); \
 \
 			_dim += _dim_size; \
 			_dim += obj->space; \
@@ -1571,7 +1604,7 @@ static void ui_list_render(struct Base *base, struct Rect svp)
 	for (int i = 0; i < obj->children; i++) {
 		struct Base *c = obj->child[i];
 
-		ui_render(c, svp);
+		ui_render(base, c, svp);
 	}
 }
 
@@ -2412,7 +2445,7 @@ int main()
 		return -1;
 	}
 
-	app.base.vp = app.base.svp = app.base.dirty = rect_new(0, 0, H_RES, V_RES);
+	app.base.lvp = app.base.vp = app.base.svp = app.base.dirty = rect_new(0, 0, H_RES, V_RES);
 
 	relayout = &app.base;
 	rerender = &app.base;
