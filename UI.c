@@ -130,6 +130,11 @@ static int size_valid(struct Pair p)
 	return p.w > 0 && p.h > 0;
 }
 
+static int pair_equal(struct Pair p1, struct Pair p2)
+{
+	return memcmp(&p1, &p2, sizeof(struct Pair)) == 0;
+}
+
 struct Rect {
 	union {
 		struct {
@@ -653,7 +658,7 @@ static void ui_update_dirty(struct Base *base)
 
 static void ui_set_vp(struct Base *base, struct Rect vp)
 {
-	base->valid = rect_equal(base->lvp, vp);
+	base->valid = pair_equal(base->lvp.s, vp.s);
 	base->lvp = vp;
 }
 
@@ -984,6 +989,97 @@ struct Circle {
 	int radius;
 	uint32_t color;
 };
+
+struct Rotary {
+	struct Base base;
+
+	struct Pair p;
+	struct Base *content;
+
+	int offset;
+	int size;
+};
+
+static int ui_rotary_get_width(struct Base *base)
+{
+	struct Rotary *obj = (struct Rotary *)base;
+
+	return ui_get_width(obj->content);
+}
+
+static void ui_rotary_layout(struct Base *base, struct Pair size)
+{
+	struct Rotary *obj = (struct Rotary *)base;
+	struct Rect vp = rect_new(0, 0, ui_get_width(obj->content), ui_get_height(obj->content));
+
+	if (vp.w < 0) {
+		vp.w = size.w;
+	}
+
+	if (vp.h < 0) {
+		vp.h = size.h;
+	}
+
+	obj->size = vp.h;
+
+	if (vp.h <= size.h) {
+		obj->offset = 0;
+	}
+
+	ui_set_vp(obj->content, rect_move(vp, pair_new(0, obj->offset)));
+}
+
+static void ui_rotary_layout_children(struct Base *base)
+{
+	struct Rotary *obj = (struct Rotary *)base;
+
+	ui_layout_child(base, obj->content);
+}
+
+static void ui_rotary_render(struct Base *base, struct Rect svp)
+{
+	struct Rotary *obj = (struct Rotary *)base;
+
+	ui_render(base, obj->content, svp);
+}
+
+static int ui_rotary_invalidate(struct Base *base)
+{
+	return 0;
+}
+
+static int ui_list_get_child_height(struct List *obj, int i)
+{
+	if (0 <= i && i < obj->children) {
+		return obj->child[i]->lvp.h + obj->space;
+	}
+	return -3;
+}
+
+static void ui_rotary_handle_cursor_event(struct Base *base, enum EventCursorType type, struct Pair p)
+{
+	struct Rotary *obj = (struct Rotary *)base;
+	int h = ui_list_get_child_height((struct List *)obj->content, 0);
+
+	switch (type) {
+	case EV_CURSOR_DOWN:
+		obj->p = p;
+		break;
+	case EV_CURSOR_MOVE:
+		obj->offset += p.y - obj->p.y;
+		while (obj->offset > 0) {
+			obj->offset -= h;
+		}
+		while (obj->offset <= -h) {
+			obj->offset += h;
+		}
+		obj->p = p;
+		ui_invalidate(base);
+		break;
+	default:
+		break;
+	}
+}
 
 static int ui_dummy_box_get_width(struct Base *base)
 {
@@ -1850,6 +1946,7 @@ static struct List settings;
 static struct BoxExpander settings_expander = UI_BOX_EXPANDER(UI_BOX_RAW(0, 0, ALIGN_BEGIN, ALIGN_MIDDLE, 0x01579b, UI_REF(settings)), INHERIT_CHILD, INHERIT_CHILD);
 
 static void ui_button_bitmap_settings_activate(struct Base *base);
+static void ui_button_bitmap_pages_activate(struct Base *base);
 
 static struct List top_panel = UI_LIST(1, 4,
 	UI_CHILDREN(
@@ -1890,7 +1987,7 @@ static struct List top_panel = UI_LIST(1, 4,
 							UI_REF(UI_BUTTON_BITMAP(7, UI_BUTTON_NORMAL)),
 							UI_REF(UI_BUTTON_BITMAP(9, UI_BUTTON_NORMAL)),
 							UI_REF(UI_BUTTON_BITMAP(10, UI_BUTTON_NORMAL)),
-							UI_REF(UI_BUTTON_BITMAP(5, UI_BUTTON_SWITCH)),
+							UI_REF(UI_BUTTON_BITMAP(5, UI_BUTTON_SWITCH, .on_activate = ui_button_bitmap_pages_activate)),
 						)
 					)
 				)
@@ -2383,10 +2480,102 @@ static struct List settings = UI_LIST(1, 4,
 	)
 );
 
+#define PAGE_ELEMENT(num) \
+	UI_REF( \
+		UI_LIST(0, 4, \
+			UI_CHILDREN( \
+				UI_REF( \
+					UI_BOX(INHERIT_PARENT, INHERIT_CHILD, ALIGN_MIDDLE, ALIGN_MIDDLE, 0, \
+						UI_REF( \
+							UI_TEXT(#num) \
+						) \
+					) \
+				), \
+				UI_REF( \
+					UI_COLOR_BOX(75, 128, 0x777777) \
+				), \
+			) \
+		) \
+	) \
+
+#define PAGE_SCROLL() \
+	UI_REF( \
+		UI_BOX(30, 12, ALIGN_MIDDLE, ALIGN_MIDDLE, 0, \
+			UI_REF( \
+				UI_COLOR_BOX(INHERIT_PARENT, 4, 0xffffff) \
+			) \
+		) \
+	)
+
+#define UI_ROTARY(_content) \
+	(struct Rotary) { \
+		.base = { \
+			.get_width = ui_rotary_get_width, \
+			.get_height = ui_dummy_inherit_parent, \
+			.layout = ui_rotary_layout, \
+			.layout_children = ui_rotary_layout_children, \
+			.render = ui_rotary_render, \
+			.invalidate = ui_rotary_invalidate, \
+			.pick = ui_dummy_pick, \
+			.handle_cursor_event = ui_rotary_handle_cursor_event, \
+		}, \
+		.content = _content, \
+	}
+
+static struct List pages = UI_LIST(1, 4,
+	UI_CHILDREN(
+		UI_REF(
+			UI_BOX(INHERIT_PARENT, INHERIT_CHILD, ALIGN_BEGIN, ALIGN_BEGIN, 0x01579b,
+				UI_REF(
+					UI_LIST(1, 4,
+						UI_CHILDREN(
+							PAGE_ELEMENT(1),
+							PAGE_ELEMENT(2),
+							PAGE_ELEMENT(3),
+							PAGE_ELEMENT(4),
+							PAGE_ELEMENT(5),
+							PAGE_ELEMENT(6),
+							PAGE_ELEMENT(7),
+							PAGE_ELEMENT(8),
+							PAGE_ELEMENT(9),
+							PAGE_ELEMENT(10),
+						)
+					)
+				)
+			)
+		),
+		UI_REF(
+			UI_BOX(INHERIT_CHILD, INHERIT_PARENT, ALIGN_BEGIN, ALIGN_BEGIN, 0x01579b,
+				UI_REF(
+					UI_ROTARY(
+						UI_REF(
+							UI_LIST(0, 10,
+								UI_CHILDREN(
+									PAGE_SCROLL(),
+									PAGE_SCROLL(),
+									PAGE_SCROLL(),
+									PAGE_SCROLL(),
+									PAGE_SCROLL(),
+									PAGE_SCROLL(),
+									PAGE_SCROLL(),
+									PAGE_SCROLL(),
+								)
+							)
+						)
+					)
+				)
+			)
+		),
+	)
+);
+
+static struct BoxExpander pages_expander = UI_BOX_EXPANDER(UI_BOX_RAW(0, 0, ALIGN_BEGIN, ALIGN_MIDDLE, 0x01579b, UI_REF(pages)), INHERIT_CHILD, INHERIT_CHILD);
+
 struct List app = UI_LIST(0, 4,
 	UI_CHILDREN(
 		UI_REF(top_panel),
 		UI_REF(settings_expander),
+		UI_REF(pages_expander),
 		UI_REF(UI_COLOR_BOX(INHERIT_PARENT, INHERIT_PARENT, 0xeff4ff)),
 	)
 );
@@ -2394,6 +2583,21 @@ struct List app = UI_LIST(0, 4,
 static void ui_button_bitmap_settings_activate(struct Base *base)
 {
 	struct BoxExpander *be = &settings_expander;
+	int w = be->width;
+	int h = be->height;
+
+	be->width = be->super.width;
+	be->height = be->super.height;
+
+	be->super.width = w;
+	be->super.height = h;
+
+	ui_invalidate(be->super.base.parent);
+}
+
+static void ui_button_bitmap_pages_activate(struct Base *base)
+{
+	struct BoxExpander *be = &pages_expander;
 	int w = be->width;
 	int h = be->height;
 
