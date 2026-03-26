@@ -955,6 +955,16 @@ struct List {
 
 	int children;
 	struct Base **child;
+
+	struct Pair p;
+	int offset;
+	int child_start;
+	int global_index;
+	void (*generate)(struct Base *base, int index);
+	int has_min;
+	int has_max;
+	int index_min;
+	int index_max;
 };
 
 struct Slider {
@@ -990,88 +1000,64 @@ struct Circle {
 	uint32_t color;
 };
 
-struct Rotary {
-	struct Base base;
-
-	struct Pair p;
-	struct Base *content;
-
-	int offset;
-	int size;
-};
-
-static int ui_rotary_get_width(struct Base *base)
+static void ui_text_set(struct Text *obj, const char *fmt, ...);
+static void ui_rotary_generate(struct Base *base, int index)
 {
-	struct Rotary *obj = (struct Rotary *)base;
+	struct List *list = (struct List *)base;
+	struct Box *box = (struct Box *)list->child[0];
+	struct Text *text = (struct Text *)box->content;
 
-	return ui_get_width(obj->content);
-}
-
-static void ui_rotary_layout(struct Base *base, struct Pair size)
-{
-	struct Rotary *obj = (struct Rotary *)base;
-	struct Rect vp = rect_new(0, 0, ui_get_width(obj->content), ui_get_height(obj->content));
-
-	if (vp.w < 0) {
-		vp.w = size.w;
-	}
-
-	if (vp.h < 0) {
-		vp.h = size.h;
-	}
-
-	obj->size = vp.h;
-
-	if (vp.h <= size.h) {
-		obj->offset = 0;
-	}
-
-	ui_set_vp(obj->content, rect_move(vp, pair_new(0, obj->offset)));
-}
-
-static void ui_rotary_layout_children(struct Base *base)
-{
-	struct Rotary *obj = (struct Rotary *)base;
-
-	ui_layout_child(base, obj->content);
-}
-
-static void ui_rotary_render(struct Base *base, struct Rect svp)
-{
-	struct Rotary *obj = (struct Rotary *)base;
-
-	ui_render(base, obj->content, svp);
-}
-
-static int ui_rotary_invalidate(struct Base *base)
-{
-	return 0;
-}
-
-static int ui_list_get_child_height(struct List *obj, int i)
-{
-	if (0 <= i && i < obj->children) {
-		return obj->child[i]->lvp.h + obj->space;
-	}
-	return -3;
+	ui_text_set(text, "%i", index + 1);
 }
 
 static void ui_rotary_handle_cursor_event(struct Base *base, enum EventCursorType type, struct Pair p)
 {
-	struct Rotary *obj = (struct Rotary *)base;
-	int h = ui_list_get_child_height((struct List *)obj->content, 0);
+	struct List *obj = (struct List *)base;
+	int s = 0;
+	int delta = 0;
+
+	if (obj->horizontal) {
+		s = obj->child[0]->lvp.w + obj->space;
+		delta = p.x - obj->p.x;
+	} else {
+		s = obj->child[0]->lvp.h + obj->space;
+		delta = p.y - obj->p.y;
+	}
 
 	switch (type) {
 	case EV_CURSOR_DOWN:
 		obj->p = p;
 		break;
 	case EV_CURSOR_MOVE:
-		obj->offset += p.y - obj->p.y;
+		obj->offset += delta;
 		while (obj->offset > 0) {
-			obj->offset -= h;
+			obj->offset -= s;
+			obj->child_start--;
+			if (obj->child_start < 0) {
+				obj->child_start = obj->children - 1;
+			}
+			obj->global_index--;
+			if (obj->has_min && obj->global_index < 0) {
+				obj->global_index = 0;
+				obj->child_start = 0;
+				obj->offset = 0;
+			} else {
+				if (obj->generate) {
+					obj->generate(obj->child[obj->child_start], obj->global_index);
+				}
+			}
 		}
-		while (obj->offset <= -h) {
-			obj->offset += h;
+		while (obj->offset <= -s) {
+			if (obj->generate) {
+				obj->generate(obj->child[obj->child_start], obj->global_index + obj->children);
+			}
+
+			obj->offset += s;
+			obj->child_start++;
+			if (obj->child_start == obj->children) {
+				obj->child_start = 0;
+			}
+			obj->global_index++;
 		}
 		obj->p = p;
 		ui_invalidate(base);
@@ -1618,20 +1604,31 @@ static void ui_list_layout(struct Base *base, struct Pair size)
 		int iwos = 0; \
 		int children = 0; \
 \
-		for (int i = 0; i < obj->children; i++) { \
-			struct Base *c = obj->child[i]; \
-			int cs = c->_method(c); \
+		_dim += obj->offset; \
 \
-			if (cs == 0) { \
-				continue; \
-			} \
+		{ \
+			int start = obj->child_start; \
+			int end = obj->children; \
 \
-			children++; \
+			for (int j = 0; j < 2; j++) { \
+				for (int i = start; i < end; i++) { \
+					struct Base *c = obj->child[i]; \
+					int cs = c->_method(c); \
 \
-			if (cs > 0) { \
-				total_size += cs; \
-			} else { \
-				iwos++; \
+					if (cs == 0) { \
+						continue; \
+					} \
+\
+					children++; \
+\
+					if (cs > 0) { \
+						total_size += cs; \
+					} else { \
+						iwos++; \
+					} \
+				} \
+				start = 0; \
+				end = obj->child_start; \
 			} \
 		} \
 \
@@ -1643,33 +1640,42 @@ static void ui_list_layout(struct Base *base, struct Pair size)
 			last_size = _size - total_size - even_size * (iwos - 1); \
 		} \
 \
-		for (int i = 0; i < obj->children; i++) { \
-			struct Base *c = obj->child[i]; \
-			int _dim_size = c->_method(c); \
-			int _dim_size2 = c->_method2(c); \
+		{ \
+			int start = obj->child_start; \
+			int end = obj->children; \
 \
-			if (_dim_size == 0 || _dim_size2 == 0) { \
-				ui_set_vp(c, rect_new(0, 0, 0, 0)); \
-				continue; \
-			} \
+			for (int j = 0; j < 2; j++) { \
+				for (int i = start; i < end; i++) { \
+					struct Base *c = obj->child[i]; \
+					int _dim_size = c->_method(c); \
+					int _dim_size2 = c->_method2(c); \
 \
-			if (_dim_size < 0) { \
-				_dim_size = even_size; \
+					if (_dim_size == 0 || _dim_size2 == 0) { \
+						ui_set_vp(c, rect_new(0, 0, 0, 0)); \
+						continue; \
+					} \
 \
-				iwos--; \
-				if (iwos == 0) { \
-					_dim_size = last_size; \
+					if (_dim_size < 0) { \
+						_dim_size = even_size; \
+\
+						iwos--; \
+						if (iwos == 0) { \
+							_dim_size = last_size; \
+						} \
+					} \
+\
+					if (_dim_size2 < 0) { \
+						_dim_size2 = _size2; \
+					} \
+\
+					ui_set_vp(c, rect_new(x, y, width, height)); \
+\
+					_dim += _dim_size; \
+					_dim += obj->space; \
 				} \
+				start = 0; \
+				end = obj->child_start; \
 			} \
-\
-			if (_dim_size2 < 0) { \
-				_dim_size2 = _size2; \
-			} \
-\
-			ui_set_vp(c, rect_new(x, y, width, height)); \
-\
-			_dim += _dim_size; \
-			_dim += obj->space; \
 		} \
 \
 		_dim -= obj->space; \
@@ -1696,11 +1702,18 @@ static void ui_list_layout_children(struct Base *base)
 static void ui_list_render(struct Base *base, struct Rect svp)
 {
 	struct List *obj = (struct List *)base;
+	int start = obj->child_start;
+	int end = obj->children;
 
-	for (int i = 0; i < obj->children; i++) {
-		struct Base *c = obj->child[i];
+	for (int j = 0; j < 2; j++) {
+		for (int i = start; i < end; i++) {
+			struct Base *c = obj->child[i];
 
-		ui_render(base, c, svp);
+			ui_render(base, c, svp);
+		}
+
+		start = 0;
+		end = obj->child_start;
 	}
 }
 
@@ -2480,6 +2493,19 @@ static struct List settings = UI_LIST(1, 4,
 	)
 );
 
+static char page_num[][4] = {
+	(char[4]) { "1" },
+	(char[4]) { "2" },
+	(char[4]) { "3" },
+	(char[4]) { "4" },
+	(char[4]) { "5" },
+	(char[4]) { "6" },
+	(char[4]) { "7" },
+	(char[4]) { "8" },
+	(char[4]) { "9" },
+	(char[4]) { "10" },
+};
+
 #define PAGE_ELEMENT(num) \
 	UI_REF( \
 		UI_LIST(0, 4, \
@@ -2487,7 +2513,7 @@ static struct List settings = UI_LIST(1, 4,
 				UI_REF( \
 					UI_BOX(INHERIT_PARENT, INHERIT_CHILD, ALIGN_MIDDLE, ALIGN_MIDDLE, 0, \
 						UI_REF( \
-							UI_TEXT(#num) \
+							UI_TEXT(page_num[num]) \
 						) \
 					) \
 				), \
@@ -2498,28 +2524,31 @@ static struct List settings = UI_LIST(1, 4,
 		) \
 	) \
 
-#define PAGE_SCROLL() \
+#define PAGE_SCROLL(_color) \
 	UI_REF( \
 		UI_BOX(30, 12, ALIGN_MIDDLE, ALIGN_MIDDLE, 0, \
 			UI_REF( \
-				UI_COLOR_BOX(INHERIT_PARENT, 4, 0xffffff) \
+				UI_COLOR_BOX(INHERIT_PARENT, 4, _color) \
 			) \
 		) \
 	)
 
-#define UI_ROTARY(_content) \
-	(struct Rotary) { \
+#define UI_ROTARY(_horizontal, _space, _children, ...) \
+	(struct List) { \
 		.base = { \
-			.get_width = ui_rotary_get_width, \
-			.get_height = ui_dummy_inherit_parent, \
-			.layout = ui_rotary_layout, \
-			.layout_children = ui_rotary_layout_children, \
-			.render = ui_rotary_render, \
-			.invalidate = ui_rotary_invalidate, \
+			.get_width = ui_list_get_width, \
+			.get_height = ui_list_get_height, \
+			.layout = ui_list_layout, \
+			.layout_children = ui_list_layout_children, \
+			.render = ui_list_render, \
 			.pick = ui_dummy_pick, \
 			.handle_cursor_event = ui_rotary_handle_cursor_event, \
 		}, \
-		.content = _content, \
+		.horizontal = _horizontal, \
+		.space = _space, \
+		.children = UI_CHILDREN_SIZE(_children), \
+		.child = _children, \
+		__VA_ARGS__ \
 	}
 
 static struct List pages = UI_LIST(1, 4,
@@ -2527,8 +2556,9 @@ static struct List pages = UI_LIST(1, 4,
 		UI_REF(
 			UI_BOX(INHERIT_PARENT, INHERIT_CHILD, ALIGN_BEGIN, ALIGN_BEGIN, 0x01579b,
 				UI_REF(
-					UI_LIST(1, 4,
+					UI_ROTARY(1, 4,
 						UI_CHILDREN(
+							PAGE_ELEMENT(0),
 							PAGE_ELEMENT(1),
 							PAGE_ELEMENT(2),
 							PAGE_ELEMENT(3),
@@ -2538,8 +2568,8 @@ static struct List pages = UI_LIST(1, 4,
 							PAGE_ELEMENT(7),
 							PAGE_ELEMENT(8),
 							PAGE_ELEMENT(9),
-							PAGE_ELEMENT(10),
-						)
+						),
+						.generate = ui_rotary_generate,
 					)
 				)
 			)
@@ -2547,20 +2577,16 @@ static struct List pages = UI_LIST(1, 4,
 		UI_REF(
 			UI_BOX(INHERIT_CHILD, INHERIT_PARENT, ALIGN_BEGIN, ALIGN_BEGIN, 0x01579b,
 				UI_REF(
-					UI_ROTARY(
-						UI_REF(
-							UI_LIST(0, 10,
-								UI_CHILDREN(
-									PAGE_SCROLL(),
-									PAGE_SCROLL(),
-									PAGE_SCROLL(),
-									PAGE_SCROLL(),
-									PAGE_SCROLL(),
-									PAGE_SCROLL(),
-									PAGE_SCROLL(),
-									PAGE_SCROLL(),
-								)
-							)
+					UI_ROTARY(0, 10,
+						UI_CHILDREN(
+							PAGE_SCROLL(0xff0000),
+							PAGE_SCROLL(0xffff00),
+							PAGE_SCROLL(0xff00ff),
+							PAGE_SCROLL(0xffffff),
+							PAGE_SCROLL(0x00ff00),
+							PAGE_SCROLL(0x00ffff),
+							PAGE_SCROLL(0x0000ff),
+							PAGE_SCROLL(0x000000),
 						)
 					)
 				)
