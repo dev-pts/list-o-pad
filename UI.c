@@ -577,17 +577,13 @@ static void ui_layout_child(struct Base *base, struct Base *child)
 
 	child->parent = base;
 
-	if (base) {
-		if (!rect_valid(base->lvp)) {
-			return;
-		}
-	}
-
-	if (!rect_valid(child->lvp)) {
+	if (child->valid) {
 		return;
 	}
 
-	if (child->valid) {
+	child->valid = 1;
+
+	if (!rect_valid(child->lvp)) {
 		return;
 	}
 
@@ -595,13 +591,11 @@ static void ui_layout_child(struct Base *base, struct Base *child)
 		child->layout(child, child->lvp.s);
 	}
 
-	child->valid = 1;
-
-	layout_cnt++;
-
 	if (child->layout_children) {
 		child->layout_children(child);
 	}
+
+	layout_cnt++;
 }
 
 static void ui_process(struct Base *root)
@@ -642,15 +636,15 @@ static void ui_process(struct Base *root)
 
 static void ui_update_dirty(struct Base *base)
 {
+	if (rerender == base || base->rerender_next) {
+		return;
+	}
+
 	if (!rect_valid(base->svp)) {
 		return;
 	}
 
 	base->dirty = base->svp;
-
-	if (base->rerender_next || rerender == base) {
-		return;
-	}
 
 	base->rerender_next = rerender;
 	rerender = base;
@@ -664,12 +658,14 @@ static void ui_set_vp(struct Base *base, struct Rect vp)
 
 static void ui_invalidate(struct Base *base)
 {
-	if (relayout != base && !base->next) {
-		base->next = relayout;
-		relayout = base;
+	if (relayout == base || base->next) {
+		return;
 	}
 
 	ui_update_dirty(base);
+
+	base->next = relayout;
+	relayout = base;
 
 	while (base) {
 		base->valid = 0;
@@ -1015,13 +1011,16 @@ static void ui_rotary_handle_cursor_event(struct Base *base, enum EventCursorTyp
 	struct List *obj = (struct List *)base;
 	int s = 0;
 	int delta = 0;
+	int max_offset = 0;
 
 	if (obj->horizontal) {
 		s = obj->child[0]->lvp.w + obj->space;
 		delta = p.x - obj->p.x;
+		max_offset = base->svp.w - base->lvp.w;
 	} else {
 		s = obj->child[0]->lvp.h + obj->space;
 		delta = p.y - obj->p.y;
+		max_offset = base->svp.h - base->lvp.h;
 	}
 
 	switch (type) {
@@ -1031,25 +1030,33 @@ static void ui_rotary_handle_cursor_event(struct Base *base, enum EventCursorTyp
 	case EV_CURSOR_MOVE:
 		obj->offset += delta;
 		while (obj->offset > 0) {
+			obj->global_index--;
+			if (obj->has_min && obj->global_index < obj->index_min) {
+				obj->global_index = obj->index_min;
+				obj->child_start = 0;
+				obj->offset = 0;
+				break;
+			}
+
 			obj->offset -= s;
 			obj->child_start--;
 			if (obj->child_start < 0) {
 				obj->child_start = obj->children - 1;
 			}
-			obj->global_index--;
-			if (obj->has_min && obj->global_index < 0) {
-				obj->global_index = 0;
-				obj->child_start = 0;
-				obj->offset = 0;
-			} else {
-				if (obj->generate) {
-					obj->generate(obj->child[obj->child_start], obj->global_index);
-				}
+			if (obj->generate) {
+				obj->generate(obj->child[obj->child_start], obj->global_index);
 			}
 		}
 		while (obj->offset <= -s) {
+			obj->global_index++;
+			if (obj->has_max && obj->global_index + obj->children > obj->index_max) {
+				obj->global_index = obj->index_max;
+				obj->offset = MAX(obj->offset, max_offset);
+				break;
+			}
+
 			if (obj->generate) {
-				obj->generate(obj->child[obj->child_start], obj->global_index + obj->children);
+				obj->generate(obj->child[obj->child_start], obj->global_index + obj->children - 1);
 			}
 
 			obj->offset += s;
@@ -1057,7 +1064,6 @@ static void ui_rotary_handle_cursor_event(struct Base *base, enum EventCursorTyp
 			if (obj->child_start == obj->children) {
 				obj->child_start = 0;
 			}
-			obj->global_index++;
 		}
 		obj->p = p;
 		ui_invalidate(base);
@@ -1149,13 +1155,13 @@ static int ui_box_invalidate(struct Base *base)
 	struct Box *obj = (struct Box *)base;
 
 	if (obj->width == INHERIT_CHILD) {
-		if (ui_get_width(obj->content) != base->vp.w) {
+		if (ui_get_width(obj->content) != base->lvp.w) {
 			return 1;
 		}
 	}
 
 	if (obj->height == INHERIT_CHILD) {
-		if (ui_get_height(obj->content) != base->vp.h) {
+		if (ui_get_height(obj->content) != base->lvp.h) {
 			return 1;
 		}
 	}
@@ -2570,6 +2576,10 @@ static struct List pages = UI_LIST(1, 4,
 							PAGE_ELEMENT(9),
 						),
 						.generate = ui_rotary_generate,
+						.has_min = 1,
+						.index_min = 0,
+						.has_max = 1,
+						.index_max = 22,
 					)
 				)
 			)
