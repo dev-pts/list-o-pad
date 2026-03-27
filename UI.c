@@ -997,7 +997,7 @@ struct Circle {
 	uint32_t color;
 };
 
-static void ui_list_scroll(struct List *obj, int delta)
+static int ui_list_scroll(struct List *obj, int delta)
 {
 	int s = 0;
 	int max_offset = 0;
@@ -1014,14 +1014,13 @@ static void ui_list_scroll(struct List *obj, int delta)
 	obj->offset += delta;
 
 	while (obj->offset > 0) {
-		obj->global_index--;
-		if (obj->has_min && obj->global_index < obj->index_min) {
-			obj->global_index = obj->index_min;
-			obj->child_start = 0;
+		if (obj->has_min && obj->global_index <= obj->index_min) {
 			obj->offset = 0;
+			delta = obj->offset - old_offset;
 			break;
 		}
 
+		obj->global_index--;
 		obj->offset -= s;
 		obj->child_start--;
 		if (obj->child_start < 0) {
@@ -1034,17 +1033,17 @@ static void ui_list_scroll(struct List *obj, int delta)
 	}
 
 	while (obj->offset <= -s) {
-		obj->global_index++;
 		if (obj->has_max && obj->global_index + obj->children > obj->index_max) {
-			obj->global_index = obj->index_max - obj->children;
-			obj->offset = MAX(obj->offset, max_offset);
+			obj->offset = MAX(obj->offset, max_offset - 1);
+			delta = obj->offset - old_offset;
 			break;
 		}
 
 		if (obj->generate) {
-			obj->generate(obj->child[obj->child_start], obj->global_index + obj->children - 1);
+			obj->generate(obj->child[obj->child_start], obj->global_index + obj->children);
 		}
 
+		obj->global_index++;
 		obj->offset += s;
 		obj->child_start++;
 		if (obj->child_start == obj->children) {
@@ -1052,9 +1051,9 @@ static void ui_list_scroll(struct List *obj, int delta)
 		}
 	}
 
-	if (old_offset != obj->offset) {
-		ui_invalidate(&obj->base);
-	}
+	ui_invalidate(&obj->base);
+
+	return delta;
 }
 
 static void ui_text_set(struct Text *obj, const char *fmt, ...);
@@ -1070,7 +1069,6 @@ static void ui_rotary_generate(struct Base *base, int index)
 static void ui_rotary_handle_cursor_event(struct Base *base, enum EventCursorType type, struct Pair p)
 {
 	struct List *obj = (struct List *)base;
-	int old_offset = obj->offset;
 	int delta = 0;
 
 	if (obj->horizontal) {
@@ -1084,13 +1082,10 @@ static void ui_rotary_handle_cursor_event(struct Base *base, enum EventCursorTyp
 		obj->p = p;
 		break;
 	case EV_CURSOR_MOVE:
-		ui_list_scroll(obj, delta);
-		obj->p = p;
-
-		if (old_offset != obj->offset) {
+		if (obj->on_scroll) {
 			obj->on_scroll(obj, delta);
-			ui_invalidate(base);
 		}
+		obj->p = p;
 		break;
 	default:
 		break;
@@ -2598,12 +2593,28 @@ static struct List pages_thumbs = UI_ROTARY(1, 4,
 	.has_min = 1,
 	.index_min = 0,
 	.has_max = 1,
-	.index_max = 22,
+	.index_max = 21,
+);
+
+static void scroll_pages(struct List *obj, int delta);
+
+static struct List pages_scroll = UI_ROTARY(0, 10,
+	UI_CHILDREN(
+		PAGE_SCROLL(0xff0000),
+		PAGE_SCROLL(0xffff00),
+		PAGE_SCROLL(0xff00ff),
+		PAGE_SCROLL(0xffffff),
+		PAGE_SCROLL(0x00ff00),
+		PAGE_SCROLL(0x00ffff),
+		PAGE_SCROLL(0x0000ff),
+		PAGE_SCROLL(0x000000),
+	),
+	.on_scroll = scroll_pages,
 );
 
 static void scroll_pages(struct List *obj, int delta)
 {
-	ui_list_scroll(&pages_thumbs, -delta);
+	ui_list_scroll(&pages_scroll, -ui_list_scroll(&pages_thumbs, -delta));
 }
 
 static struct List pages = UI_LIST(1, 4,
@@ -2615,21 +2626,7 @@ static struct List pages = UI_LIST(1, 4,
 		),
 		UI_REF(
 			UI_BOX(INHERIT_CHILD, INHERIT_PARENT, ALIGN_BEGIN, ALIGN_BEGIN, 0x01579b,
-				UI_REF(
-					UI_ROTARY(0, 10,
-						UI_CHILDREN(
-							PAGE_SCROLL(0xff0000),
-							PAGE_SCROLL(0xffff00),
-							PAGE_SCROLL(0xff00ff),
-							PAGE_SCROLL(0xffffff),
-							PAGE_SCROLL(0x00ff00),
-							PAGE_SCROLL(0x00ffff),
-							PAGE_SCROLL(0x0000ff),
-							PAGE_SCROLL(0x000000),
-						),
-						.on_scroll = scroll_pages,
-					)
-				)
+				UI_REF(pages_scroll)
 			)
 		),
 	)
