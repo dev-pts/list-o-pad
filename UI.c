@@ -943,6 +943,11 @@ struct GradientBox {
 	uint32_t color_end;
 };
 
+struct ListGen {
+	int dirty;
+	int index;
+};
+
 struct List {
 	struct Base base;
 
@@ -962,6 +967,8 @@ struct List {
 	int index_min;
 	int index_max;
 	void (*on_scroll)(struct List *obj, int delta);
+
+	struct ListGen *lg;
 };
 
 struct Slider {
@@ -1000,18 +1007,27 @@ struct Circle {
 static int ui_list_scroll(struct List *obj, int delta)
 {
 	int s = 0;
+	int se = 0;
 	int max_offset = 0;
 	int old_offset = obj->offset;
+	int cnt = obj->index_max - obj->global_index;
 
 	if (obj->horizontal) {
-		s = obj->child[0]->lvp.w + obj->space;
-		max_offset = obj->base.svp.w - obj->base.lvp.w;
+		se = obj->child[0]->lvp.w;
+		max_offset = obj->base.svp.w;
 	} else {
-		s = obj->child[0]->lvp.h + obj->space;
-		max_offset = obj->base.svp.h - obj->base.lvp.h;
+		se = obj->child[0]->lvp.h;
+		max_offset = obj->base.svp.h;
 	}
 
+	s = se + obj->space;
+	max_offset -= cnt * se + (cnt - 1) * obj->space;
+
 	obj->offset += delta;
+
+	if (obj->has_max) {
+		printf("AAAAAAAAAAAAAAAAA %i, %i, %i, %i\n", obj->offset, max_offset - obj->offset, max_offset, s);
+	}
 
 	while (obj->offset > 0) {
 		if (obj->has_min && obj->global_index <= obj->index_min) {
@@ -1027,20 +1043,20 @@ static int ui_list_scroll(struct List *obj, int delta)
 			obj->child_start = obj->children - 1;
 		}
 
-		if (obj->generate) {
-			obj->generate(obj->child[obj->child_start], obj->global_index);
+		if (obj->lg) {
+			obj->lg[obj->child_start].dirty = 1;
+			obj->lg[obj->child_start].index = obj->global_index;
 		}
 	}
 
 	while (obj->offset <= -s) {
-		if (obj->has_max && obj->global_index + obj->children > obj->index_max) {
-			obj->offset = MAX(obj->offset, max_offset - 1);
-			delta = obj->offset - old_offset;
+		if (obj->has_max && (max_offset - obj->offset) >= 0) {
 			break;
 		}
 
-		if (obj->generate) {
-			obj->generate(obj->child[obj->child_start], obj->global_index + obj->children);
+		if (obj->lg) {
+			obj->lg[obj->child_start].dirty = 1;
+			obj->lg[obj->child_start].index = obj->global_index + obj->children;
 		}
 
 		obj->global_index++;
@@ -1049,6 +1065,11 @@ static int ui_list_scroll(struct List *obj, int delta)
 		if (obj->child_start == obj->children) {
 			obj->child_start = 0;
 		}
+	}
+
+	if (obj->has_max && (max_offset - obj->offset) >= 0) {
+		obj->offset = max_offset;
+		delta = obj->offset - old_offset;
 	}
 
 	ui_invalidate(&obj->base);
@@ -1619,6 +1640,20 @@ static void ui_list_layout(struct Base *base, struct Pair size)
 {
 	struct List *obj = (struct List *)base;
 
+	if (obj->lg) {
+		for (int i = 0; i < obj->children; i++) {
+			struct Base *c = obj->child[i];
+			struct ListGen *lg = &obj->lg[i];
+
+			if (lg->dirty) {
+				if (obj->generate) {
+					obj->generate(c, lg->index);
+				}
+				lg->dirty = 0;
+			}
+		}
+	}
+
 #define LIST_LAYOUT(_method, _size, _dim, _dim_size, _method2, _dim_size2, _size2) \
 	do { \
 		int x = 0; \
@@ -1629,7 +1664,7 @@ static void ui_list_layout(struct Base *base, struct Pair size)
 		int iwos = 0; \
 		int children = 0; \
 \
-		_dim += obj->offset; \
+		_dim = obj->offset; \
 \
 		{ \
 			int start = obj->child_start; \
@@ -2519,16 +2554,33 @@ static struct List settings = UI_LIST(1, 4,
 );
 
 static char page_num[][4] = {
-	(char[4]) { "1" },
-	(char[4]) { "2" },
-	(char[4]) { "3" },
-	(char[4]) { "4" },
-	(char[4]) { "5" },
-	(char[4]) { "6" },
-	(char[4]) { "7" },
-	(char[4]) { "8" },
-	(char[4]) { "9" },
-	(char[4]) { "10" },
+	(char[4]) { "" },
+	(char[4]) { "" },
+	(char[4]) { "" },
+	(char[4]) { "" },
+	(char[4]) { "" },
+	(char[4]) { "" },
+	(char[4]) { "" },
+	(char[4]) { "" },
+	(char[4]) { "" },
+	(char[4]) { "" },
+	(char[4]) { "" },
+	(char[4]) { "" },
+};
+
+struct ListGen page_lg[] = {
+	{ 1, 0 },
+	{ 1, 1 },
+	{ 1, 2 },
+	{ 1, 3 },
+	{ 1, 4 },
+	{ 1, 5 },
+	{ 1, 6 },
+	{ 1, 7 },
+	{ 1, 8 },
+	{ 1, 9 },
+	{ 1, 10 },
+	{ 1, 11 },
 };
 
 #define PAGE_ELEMENT(num) \
@@ -2588,12 +2640,15 @@ static struct List pages_thumbs = UI_ROTARY(1, 4,
 		PAGE_ELEMENT(7),
 		PAGE_ELEMENT(8),
 		PAGE_ELEMENT(9),
+		PAGE_ELEMENT(10),
+		PAGE_ELEMENT(11),
 	),
 	.generate = ui_rotary_generate,
 	.has_min = 1,
 	.index_min = 0,
 	.has_max = 1,
-	.index_max = 21,
+	.index_max = 3,
+	.lg = page_lg,
 );
 
 static void scroll_pages(struct List *obj, int delta);
