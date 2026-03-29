@@ -943,9 +943,9 @@ struct GradientBox {
 	uint32_t color_end;
 };
 
-struct ListGen {
-	int dirty;
-	int index;
+enum ListGen {
+	LISTGEN_DIRTY,
+	LISTGEN_VALID,
 };
 
 struct List {
@@ -964,11 +964,11 @@ struct List {
 	void (*generate)(struct Base *base, int index);
 	int has_min;
 	int has_max;
-	int index_min;
 	int index_max;
 	void (*on_scroll)(struct List *obj, int delta);
 
-	struct ListGen *lg;
+	enum ListGen *lg;
+	int lg_cnt;
 };
 
 struct Slider {
@@ -1008,31 +1008,23 @@ static int ui_list_scroll(struct List *obj, int delta)
 {
 	int s = 0;
 	int se = 0;
-	int max_offset = 0;
+	int ws = 0;
 	int old_offset = obj->offset;
-	int cnt = obj->index_max - obj->global_index;
 
 	if (obj->horizontal) {
 		se = obj->child[0]->lvp.w;
-		max_offset = obj->base.svp.w;
+		ws = obj->base.svp.w;
 	} else {
 		se = obj->child[0]->lvp.h;
-		max_offset = obj->base.svp.h;
+		s = obj->base.svp.h;
 	}
 
 	s = se + obj->space;
-	max_offset -= cnt * se + (cnt - 1) * obj->space;
 
 	obj->offset += delta;
 
-	if (obj->has_max) {
-		printf("AAAAAAAAAAAAAAAAA %i, %i, %i, %i\n", obj->offset, max_offset - obj->offset, max_offset, s);
-	}
-
 	while (obj->offset > 0) {
-		if (obj->has_min && obj->global_index <= obj->index_min) {
-			obj->offset = 0;
-			delta = obj->offset - old_offset;
+		if (obj->has_min && obj->global_index == 0) {
 			break;
 		}
 
@@ -1044,19 +1036,17 @@ static int ui_list_scroll(struct List *obj, int delta)
 		}
 
 		if (obj->lg) {
-			obj->lg[obj->child_start].dirty = 1;
-			obj->lg[obj->child_start].index = obj->global_index;
+			obj->lg[obj->child_start] = LISTGEN_DIRTY;
 		}
 	}
 
 	while (obj->offset <= -s) {
-		if (obj->has_max && (max_offset - obj->offset) >= 0) {
+		if (obj->has_max && obj->global_index + obj->lg_cnt == obj->index_max + 1) {
 			break;
 		}
 
 		if (obj->lg) {
-			obj->lg[obj->child_start].dirty = 1;
-			obj->lg[obj->child_start].index = obj->global_index + obj->children;
+			obj->lg[obj->child_start] = LISTGEN_DIRTY;
 		}
 
 		obj->global_index++;
@@ -1067,7 +1057,13 @@ static int ui_list_scroll(struct List *obj, int delta)
 		}
 	}
 
-	if (obj->has_max && (max_offset - obj->offset) >= 0) {
+	int cnt = obj->index_max - obj->global_index + 1;
+	int max_offset = MIN(ws - (cnt * se + (cnt - 1) * obj->space), 0);
+
+	if (obj->has_min && obj->global_index == 0 && obj->offset > 0) {
+		obj->offset = 0;
+		delta = obj->offset - old_offset;
+	} else if (obj->has_max && obj->global_index + obj->lg_cnt == obj->index_max + 1 && obj->offset < max_offset) {
 		obj->offset = max_offset;
 		delta = obj->offset - old_offset;
 	}
@@ -1641,15 +1637,28 @@ static void ui_list_layout(struct Base *base, struct Pair size)
 	struct List *obj = (struct List *)base;
 
 	if (obj->lg) {
-		for (int i = 0; i < obj->children; i++) {
-			struct Base *c = obj->child[i];
-			struct ListGen *lg = &obj->lg[i];
+		int idx = obj->child_start;
 
-			if (lg->dirty) {
-				if (obj->generate) {
-					obj->generate(c, lg->index);
-				}
-				lg->dirty = 0;
+		obj->lg_cnt = 0;
+
+		for (int i = 0; i < obj->children; i++) {
+			struct Base *c = obj->child[idx];
+			int gi = obj->global_index + i;
+
+			if (obj->has_max && gi > obj->index_max) {
+				continue;
+			}
+
+			if (obj->lg[idx] == LISTGEN_DIRTY) {
+				obj->generate(c, gi);
+
+				obj->lg[idx] = LISTGEN_VALID;
+			}
+
+			obj->lg_cnt++;
+			idx++;
+			if (idx == obj->children) {
+				idx = 0;
 			}
 		}
 	}
@@ -1667,28 +1676,27 @@ static void ui_list_layout(struct Base *base, struct Pair size)
 		_dim = obj->offset; \
 \
 		{ \
-			int start = obj->child_start; \
-			int end = obj->children; \
+			int idx = obj->child_start; \
 \
-			for (int j = 0; j < 2; j++) { \
-				for (int i = start; i < end; i++) { \
-					struct Base *c = obj->child[i]; \
-					int cs = c->_method(c); \
-\
-					if (cs == 0) { \
-						continue; \
-					} \
-\
-					children++; \
-\
-					if (cs > 0) { \
-						total_size += cs; \
-					} else { \
-						iwos++; \
-					} \
+			for (int i = 0; i < obj->children; i++, idx++) { \
+				if (idx == obj->children) { \
+					idx = 0; \
 				} \
-				start = 0; \
-				end = obj->child_start; \
+\
+				struct Base *c = obj->child[idx]; \
+				int cs = c->_method(c); \
+\
+				if (cs == 0) { \
+					continue; \
+				} \
+\
+				children++; \
+\
+				if (cs > 0) { \
+					total_size += cs; \
+				} else { \
+					iwos++; \
+				} \
 			} \
 		} \
 \
@@ -1701,40 +1709,39 @@ static void ui_list_layout(struct Base *base, struct Pair size)
 		} \
 \
 		{ \
-			int start = obj->child_start; \
-			int end = obj->children; \
+			int idx = obj->child_start; \
 \
-			for (int j = 0; j < 2; j++) { \
-				for (int i = start; i < end; i++) { \
-					struct Base *c = obj->child[i]; \
-					int _dim_size = c->_method(c); \
-					int _dim_size2 = c->_method2(c); \
-\
-					if (_dim_size == 0 || _dim_size2 == 0) { \
-						ui_set_vp(c, rect_new(0, 0, 0, 0)); \
-						continue; \
-					} \
-\
-					if (_dim_size < 0) { \
-						_dim_size = even_size; \
-\
-						iwos--; \
-						if (iwos == 0) { \
-							_dim_size = last_size; \
-						} \
-					} \
-\
-					if (_dim_size2 < 0) { \
-						_dim_size2 = _size2; \
-					} \
-\
-					ui_set_vp(c, rect_new(x, y, width, height)); \
-\
-					_dim += _dim_size; \
-					_dim += obj->space; \
+			for (int i = 0; i < obj->children; i++, idx++) { \
+				if (idx == obj->children) { \
+					idx = 0; \
 				} \
-				start = 0; \
-				end = obj->child_start; \
+\
+				struct Base *c = obj->child[idx]; \
+				int _dim_size = c->_method(c); \
+				int _dim_size2 = c->_method2(c); \
+\
+				if (_dim_size == 0 || _dim_size2 == 0) { \
+					ui_set_vp(c, rect_new(0, 0, 0, 0)); \
+					continue; \
+				} \
+\
+				if (_dim_size < 0) { \
+					_dim_size = even_size; \
+\
+					iwos--; \
+					if (iwos == 0) { \
+						_dim_size = last_size; \
+					} \
+				} \
+\
+				if (_dim_size2 < 0) { \
+					_dim_size2 = _size2; \
+				} \
+\
+				ui_set_vp(c, rect_new(x, y, width, height)); \
+\
+				_dim += _dim_size; \
+				_dim += obj->space; \
 			} \
 		} \
 \
@@ -1762,18 +1769,23 @@ static void ui_list_layout_children(struct Base *base)
 static void ui_list_render(struct Base *base, struct Rect svp)
 {
 	struct List *obj = (struct List *)base;
-	int start = obj->child_start;
-	int end = obj->children;
+	int idx = obj->child_start;
 
-	for (int j = 0; j < 2; j++) {
-		for (int i = start; i < end; i++) {
-			struct Base *c = obj->child[i];
+	for (int i = 0; i < obj->children; i++) {
+		struct Base *c = obj->child[idx];
 
-			ui_render(base, c, svp);
+		if (obj->lg) {
+			if (obj->lg[idx] != LISTGEN_VALID) {
+				continue;
+			}
 		}
 
-		start = 0;
-		end = obj->child_start;
+		ui_render(base, c, svp);
+
+		idx++;
+		if (idx == obj->children) {
+			idx = 0;
+		}
 	}
 }
 
@@ -2568,20 +2580,7 @@ static char page_num[][4] = {
 	(char[4]) { "" },
 };
 
-struct ListGen page_lg[] = {
-	{ 1, 0 },
-	{ 1, 1 },
-	{ 1, 2 },
-	{ 1, 3 },
-	{ 1, 4 },
-	{ 1, 5 },
-	{ 1, 6 },
-	{ 1, 7 },
-	{ 1, 8 },
-	{ 1, 9 },
-	{ 1, 10 },
-	{ 1, 11 },
-};
+enum ListGen page_lg[12] = {};
 
 #define PAGE_ELEMENT(num) \
 	UI_REF( \
@@ -2645,7 +2644,6 @@ static struct List pages_thumbs = UI_ROTARY(1, 4,
 	),
 	.generate = ui_rotary_generate,
 	.has_min = 1,
-	.index_min = 0,
 	.has_max = 1,
 	.index_max = 3,
 	.lg = page_lg,
