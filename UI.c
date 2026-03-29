@@ -1006,9 +1006,12 @@ struct Circle {
 
 static int ui_list_scroll(struct List *obj, int delta)
 {
+	int old_offset = obj->offset;
+
+	obj->offset += delta;
+
 	int se = 0;
 	int ws = 0;
-	int old_offset = obj->offset;
 
 	if (obj->horizontal) {
 		se = obj->child[0]->lvp.w;
@@ -1019,8 +1022,6 @@ static int ui_list_scroll(struct List *obj, int delta)
 	}
 
 	int s = se + obj->space;
-
-	obj->offset += delta;
 
 	while (obj->offset > 0) {
 		if (obj->has_min && obj->global_index == 0) {
@@ -2579,6 +2580,7 @@ static char page_num[][4] = {
 	(char[4]) { "" },
 	(char[4]) { "" },
 	(char[4]) { "" },
+	(char[4]) { "X" },
 };
 
 enum ListGen page_lg[12] = {};
@@ -2676,6 +2678,11 @@ static struct List pages = UI_LIST(1, 4,
 		UI_REF(
 			UI_BOX(INHERIT_PARENT, INHERIT_CHILD, ALIGN_BEGIN, ALIGN_BEGIN, 0x01579b,
 				UI_REF(pages_thumbs)
+			)
+		),
+		UI_REF(
+			UI_BOX(INHERIT_CHILD, INHERIT_PARENT, ALIGN_BEGIN, ALIGN_BEGIN, 0x01579b,
+				PAGE_ELEMENT(12)
 			)
 		),
 		UI_REF(
