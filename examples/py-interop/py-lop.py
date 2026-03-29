@@ -73,15 +73,14 @@ def resolve(lop, key, cb):
 
 lop = LOP.LOP()
 lop.resolve = resolve
-lop.error_cb = LOP.LOP_error_cb_t(LOP.LOP_default_error_cb)
 
 schema = LOP.map_file('schema.lop')
-rc = LOP.LOP_schema_init(lop, schema.data, schema.len)
+rc = LOP.LOP_schema_init(lop, 'schema.lop', schema.data, schema.len)
 LOP.unmap_file(schema)
 
 if rc == 0:
     src = LOP.map_file('example.lop')
-    LOP.LOP_schema_parse_source(None, lop, src.data, src.len, 'top')
+    LOP.LOP_schema_parse_source(None, lop, 'example.lop', src.data, src.len, 'top')
     LOP.unmap_file(src)
 
 LOP.LOP_schema_deinit(lop)

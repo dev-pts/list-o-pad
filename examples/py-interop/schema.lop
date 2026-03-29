@@ -1,4 +1,4 @@
-` Pseudo HDL to Verilog translator
+\\ Pseudo HDL to Verilog translator
 
 : #operators
 	{
