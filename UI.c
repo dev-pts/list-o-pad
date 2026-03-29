@@ -1006,7 +1006,6 @@ struct Circle {
 
 static int ui_list_scroll(struct List *obj, int delta)
 {
-	int s = 0;
 	int se = 0;
 	int ws = 0;
 	int old_offset = obj->offset;
@@ -1016,10 +1015,10 @@ static int ui_list_scroll(struct List *obj, int delta)
 		ws = obj->base.svp.w;
 	} else {
 		se = obj->child[0]->lvp.h;
-		s = obj->base.svp.h;
+		ws = obj->base.svp.h;
 	}
 
-	s = se + obj->space;
+	int s = se + obj->space;
 
 	obj->offset += delta;
 
@@ -1062,15 +1061,17 @@ static int ui_list_scroll(struct List *obj, int delta)
 
 	if (obj->has_min && obj->global_index == 0 && obj->offset > 0) {
 		obj->offset = 0;
-		delta = obj->offset - old_offset;
 	} else if (obj->has_max && obj->global_index + obj->lg_cnt == obj->index_max + 1 && obj->offset < max_offset) {
 		obj->offset = max_offset;
-		delta = obj->offset - old_offset;
 	}
 
-	ui_invalidate(&obj->base);
+	int ret = obj->offset - old_offset;
 
-	return delta;
+	if (ret) {
+		ui_invalidate(&obj->base);
+	}
+
+	return ret;
 }
 
 static void ui_text_set(struct Text *obj, const char *fmt, ...);
@@ -2645,7 +2646,7 @@ static struct List pages_thumbs = UI_ROTARY(1, 4,
 	.generate = ui_rotary_generate,
 	.has_min = 1,
 	.has_max = 1,
-	.index_max = 3,
+	.index_max = 7,
 	.lg = page_lg,
 );
 
