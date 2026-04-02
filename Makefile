@@ -1,4 +1,4 @@
-SRCS := src/TextToASTv2.c src/AST.c src/ASTSchema.c util/FileMap.c
+SRCS := src/TextToAST.c src/AST.c src/ASTSchema.c util/FileMap.c
 OBJS := $(SRCS:.c=.o)
 
 CFLAGS := -Wall -O2 -Iinclude/ -fPIC
@@ -6,7 +6,7 @@ CFLAGS := -Wall -O2 -Iinclude/ -fPIC
 all: liblop.so liblop.a test/lop-schema test/lop-ast
 
 src/ASTSchema.o: src/ASTSchema.c src/RootSchema.c src/ErrorReport.c src/KV.c
-src/TextToASTv2.o: src/TextToASTv2.c src/lex.yy.c src/ErrorReport.c
+src/TextToAST.o: src/TextToAST.c src/lex.yy.c src/ErrorReport.c
 src/lex.yy.c: src/lop.l
 	flex -o $@ $^
 

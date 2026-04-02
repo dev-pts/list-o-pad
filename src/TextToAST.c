@@ -1,1096 +1,631 @@
 #include <assert.h>
-#include <ctype.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include <LOP.h>
 
-struct Token {
-	enum TokenType {
-		TOKEN_EOF = -1,
+#include "lex.yy.c"
 
-		TOKEN_SYMBOL,
+static struct LOP_ASTNode *last_list;
+static struct LOP_ASTNode *last_token;
+static int indent;
+static int newline_was;
+static int continue_was;
+static size_t l_line_offset;
+static struct LOP_Location last_loc;
+static size_t l_str_offset;
 
-		TOKEN_COMMA,
-		TOKEN_COMMIT,
+#include "ErrorReport.c"
 
-		TOKEN_LIST_OPEN,
-		TOKEN_LIST_CLOSE,
-	} type;
+static void l_report(enum LOP_ErrorType type, const char *filename, const char *string, size_t len, struct LOP_Location loc)
+{
+	const char *err_string = NULL;
 
-	union {
-		enum LOP_ListType list_type;
-		struct SymbolToken {
-			char *str;
-			const char *buf;
-			int buf_size;
+	switch (type) {
+	case LOP_ERROR_LEXER_OUT_OF_MEMORY:
+		err_string = "Out of memory";
+		break;
+	case LOP_ERROR_LEXER_UNKNOWN:
+		err_string = "Unknown symbol";
+		break;
+	case LOP_ERROR_LEXER_UNBALANCED:
+		err_string = "Unbalanced list";
+		break;
+	case LOP_ERROR_LEXER_ROOT_CLOSED:
+		err_string = "Root list is closed by ;";
+		break;
+	case LOP_ERROR_LEXER_ROOT_CLOSED_BY_INDENT:
+		err_string = "Root list is closed by indent";
+		break;
+	case LOP_ERROR_LEXER_SEPARATOR:
+		err_string = "Separator expected";
+		break;
+	case LOP_ERROR_LEXER_UNARY_ARGS:
+		err_string = "Unary operator expects exactly 1 argument";
+		break;
+	case LOP_ERROR_LEXER_UNARY_UNKNOWN:
+		err_string = "Unknown unary operator";
+		break;
+	case LOP_ERROR_LEXER_BINARY_ARGS:
+		err_string = "Binary operator expects exactly 2 arguments";
+		break;
+	case LOP_ERROR_LEXER_BINARY_UNKNOWN:
+		err_string = "Unknown binary operator";
+		break;
+	default:
+		assert(1);
+	}
 
-			enum LOP_SymbolType type;
-		} symbol;
+	report_error(filename, string, len, loc, err_string);
+}
+
+static struct LOP_Location get_loc(void)
+{
+	return (struct LOP_Location) {
+		.lineno = yylineno,
+		.charno = l_str_offset - l_line_offset,
+		.line_offset = l_line_offset,
 	};
-
-	struct LOP_Location loc;
-};
-
-struct State {
-	const char *string;
-	/* Current position inside the string */
-	size_t c;
-	/* strlen of the string */
-	size_t end;
-
-	struct Token token;
-	struct LOP_Location loc;
-
-	int indent;
-
-	struct {
-		enum {
-			STRINGER_IDLE,
-			STRINGER_GOBBLE,
-			STRINGER_CLOSING,
-		} state;
-		int stop_indent;
-		int type;
-	} stringer;
-
-	LOP_error_cb_t error_cb;
-};
-
-static void dump_loc(struct LOP_Location *loc, const char *fmt, FILE *stream)
-{
-	fprintf(stream, fmt, loc->lineno, loc->charno);
 }
 
-static void dump_state(struct State *state)
+static struct LOP_ASTNode *create_token(enum LOP_ASTNodeType type)
 {
-	struct Token *t = &state->token;
+	struct LOP_ASTNode *t = calloc(1, sizeof(*t));
 
-	printf("Token type: ");
-#define CASE_TOKEN_TYPE(type)	case type: printf(#type); break
-	switch (t->type) {
-		CASE_TOKEN_TYPE(TOKEN_EOF);
-		CASE_TOKEN_TYPE(TOKEN_SYMBOL);
-		CASE_TOKEN_TYPE(TOKEN_COMMA);
-		CASE_TOKEN_TYPE(TOKEN_COMMIT);
-		CASE_TOKEN_TYPE(TOKEN_LIST_OPEN);
-		CASE_TOKEN_TYPE(TOKEN_LIST_CLOSE);
+	if (t == NULL) {
+		return NULL;
 	}
-#undef CASE_TOKEN_TYPE
-	if (t->type == TOKEN_LIST_OPEN || t->type == TOKEN_LIST_CLOSE) {
-		printf("/");
-#define CASE_LIST_TYPE(type)	case type: printf(#type); break
-		switch (t->list_type) {
-			CASE_LIST_TYPE(LOP_LIST_TLIST);
-			CASE_LIST_TYPE(LOP_LIST_LIST);
-			CASE_LIST_TYPE(LOP_LIST_AREF);
-			CASE_LIST_TYPE(LOP_LIST_STRUCT);
-			CASE_LIST_TYPE(LOP_LIST_OPERATOR);
-			CASE_LIST_TYPE(LOP_LIST_STRING);
-		}
-#undef CASE_LIST_TYPE
-	} else if (t->type == TOKEN_SYMBOL) {
-		printf("/");
-#define CASE_SYMBOL_TYPE(type)	case type: printf(#type); break
-		switch (t->symbol.type) {
-			CASE_SYMBOL_TYPE(LOP_SYMBOL_IDENTIFIER);
-			CASE_SYMBOL_TYPE(LOP_SYMBOL_NUMBER);
-			CASE_SYMBOL_TYPE(LOP_SYMBOL_STRING);
-			CASE_SYMBOL_TYPE(LOP_SYMBOL_OPERATOR);
-		}
-#undef CASE_LIST_TYPE
-	}
-	printf("\n");
-	if (t->type == TOKEN_SYMBOL) {
-		printf("\tValue: '");
-		for (int i = 0; i < t->symbol.buf_size; i++) {
-			printf("%c", t->symbol.buf[i]);
-		}
-		printf("'\n");
-	}
-	dump_loc(&t->loc, "\tLocation: %i:%i\n", stdout);
-	printf("\tLevel: %i\n", state->indent);
-}
-
-static void token_set_type(struct State *state, enum TokenType type)
-{
-	struct Token *t = &state->token;
 
 	t->type = type;
-	t->loc = state->loc;
-}
+	t->loc = get_loc();
+	t->indent = indent;
 
-static void token_set_list_type(struct State *state, int c)
-{
-	struct Token *t = &state->token;
+	if (type > LOP_TYPE_LIST_LAST) {
+		if (type == LOP_TYPE_STRING) {
+			t->symbol.value = strdup("");
+		} else {
+			t->symbol.value = strdup(yytext);
+		}
 
-#define CASE_LIST_TYPE(lb, le, type)	case lb: case le: t->list_type = type; break
-	switch (c) {
-		CASE_LIST_TYPE(':', ';', LOP_LIST_TLIST);
-		CASE_LIST_TYPE('(', ')', LOP_LIST_LIST);
-		CASE_LIST_TYPE('[', ']', LOP_LIST_AREF);
-		CASE_LIST_TYPE('{', '}', LOP_LIST_STRUCT);
-		CASE_LIST_TYPE('\'', '"', LOP_LIST_STRING);
+		if (t->symbol.value == NULL) {
+			free(t);
+			return NULL;
+		}
 	}
-#undef CASE_LIST_TYPE
+
+	return t;
 }
 
-static int cur_char(struct State *state)
+static struct LOP_ASTNode *swap_token(struct LOP_ASTNode *t)
 {
-	if (state->c == state->end) {
+	struct LOP_ASTNode old;
+
+	old = *last_token;
+	*last_token = *t;
+	*t = old;
+
+	t->parent = NULL;
+
+	return t;
+}
+
+static int vert_colon_closed(void)
+{
+	if (last_list->type != LOP_TYPE_LIST_COLON) {
 		return 0;
 	}
-	return state->string[state->c];
-}
-
-static int next_char(struct State *state)
-{
-	state->c++;
-	state->loc.charno++;
-	return cur_char(state);
-}
-
-static void reset_buf(struct State *state)
-{
-	struct Token *t = &state->token;
-
-	t->symbol.str = NULL;
-	t->symbol.buf = &state->string[state->c];
-	t->symbol.buf_size = 0;
-}
-
-static void append_buf(struct State *state)
-{
-	struct SymbolToken *s = &state->token.symbol;
-
-	s->buf_size++;
-}
-
-static int next_token(struct State *state)
-{
-	static const char *operator_mask = ".~!@#$%^&*+-=<>/?|";
-
-	if (state->stringer.state == STRINGER_GOBBLE) {
-		bool escape = false;
-		char *res = calloc(1, 1);
-		size_t len = 1;
-
-		assert(res);
-
-		token_set_type(state, TOKEN_SYMBOL);
-
-		state->token.symbol.type = LOP_SYMBOL_STRING;
-
-		reset_buf(state);
-
-		while (cur_char(state) != 0) {
-			if (!escape && cur_char(state) == state->stringer.type) {
-				break;
-			}
-
-			if (cur_char(state) == '\n') {
-				if (escape) {
-					escape = false;
-					state->token.symbol.buf_size--;
-				} else {
-					append_buf(state);
-				}
-
-				len += state->token.symbol.buf_size;
-				res = realloc(res, len);
-				assert(res);
-				strncat(res, state->token.symbol.buf, state->token.symbol.buf_size);
-
-				state->indent = 0;
-				state->loc.lineno++;
-				state->loc.charno = 0;
-
-				next_char(state);
-
-				while (cur_char(state) == '\t' && state->indent != state->stringer.stop_indent) {
-					state->indent++;
-					next_char(state);
-				}
-
-				reset_buf(state);
-
-				if (cur_char(state) == '\n') {
-					continue;
-				}
-
-				if (cur_char(state) == 0 || cur_char(state) == state->stringer.type) {
-					break;
-				}
-
-				if (state->indent != state->stringer.stop_indent) {
-					free(res);
-
-					int rc = LOP_ERROR_TOKEN_BAD_INDENT;
-					if (state->error_cb) {
-						state->error_cb(rc,
-							(union LOP_Error) {
-								.token = {
-									.str = state->string,
-									.len = state->end,
-									.loc = state->loc,
-									.expindent = state->stringer.stop_indent,
-									.actindent = state->indent
-								}
-							}
-						);
-					}
-					return rc;
-				}
-			}
-
-			escape = !escape && (cur_char(state) == '\\');
-			append_buf(state);
-			next_char(state);
-		}
-
-		len += state->token.symbol.buf_size;
-		res = realloc(res, len);
-		assert(res);
-		strncat(res, state->token.symbol.buf, state->token.symbol.buf_size);
-		reset_buf(state);
-
-		state->token.symbol.str = res;
-
-		state->stringer.state = STRINGER_CLOSING;
+	if (newline_was == 0) {
 		return 0;
 	}
-
-	if (state->loc.charno == 1) {
-		while (cur_char(state) == '\t') {
-			state->indent++;
-			next_char(state);
-		}
-	} else if (isspace(cur_char(state))) {
-		while (cur_char(state) != 0 && cur_char(state) != '\n' && isspace(cur_char(state))) {
-			next_char(state);
-		}
+	if (continue_was == 1) {
+		return 0;
 	}
-
-	if (cur_char(state) == '`') {
-		while (cur_char(state) != 0 && cur_char(state) != '\n') {
-			next_char(state);
-		}
+	if (indent <= last_list->indent) {
+		return 1;
 	}
+	if (last_list->list.tail && last_list->list.tail->indent > last_list->indent && indent < last_list->list.tail->indent) {
+		return 1;
+	}
+	return 0;
+}
 
-	if (cur_char(state) == 0) {
-		token_set_type(state, TOKEN_EOF);
-	} else if (cur_char(state) == '\n') {
-		token_set_type(state, TOKEN_COMMIT);
+static int last_list_is_operator(void)
+{
+	return last_list->type == LOP_TYPE_LIST_OPERATOR_UNARY || last_list->type == LOP_TYPE_LIST_OPERATOR_BINARY;
+}
 
-		state->indent = 0;
-		state->loc.lineno++;
-		state->loc.charno = 0;
-
-		next_char(state);
-	} else if (isalpha(cur_char(state)) || cur_char(state) == '_') {
-		token_set_type(state, TOKEN_SYMBOL);
-
-		state->token.symbol.type = LOP_SYMBOL_IDENTIFIER;
-
-		reset_buf(state);
-
-		append_buf(state);
-		next_char(state);
-
-		while (isalnum(cur_char(state)) || cur_char(state) == '_') {
-			append_buf(state);
-			next_char(state);
-		}
-	} else if (isdigit(cur_char(state))) {
-		token_set_type(state, TOKEN_SYMBOL);
-
-		state->token.symbol.type = LOP_SYMBOL_NUMBER;
-
-		reset_buf(state);
-
-		append_buf(state);
-		next_char(state);
-
-		while (isalnum(cur_char(state)) || cur_char(state) == '_' || cur_char(state) == '.') {
-			append_buf(state);
-			next_char(state);
-		}
-	} else if (strchr(operator_mask, cur_char(state))) {
-		token_set_type(state, TOKEN_SYMBOL);
-
-		state->token.symbol.type = LOP_SYMBOL_OPERATOR;
-
-		reset_buf(state);
-
-		append_buf(state);
-		next_char(state);
-
-		while (strchr(operator_mask, cur_char(state))) {
-			append_buf(state);
-			next_char(state);
+static int operator_close_verify(void)
+{
+	if (last_list->type == LOP_TYPE_LIST_OPERATOR_UNARY) {
+		if (last_list->list.head->next != last_list->list.tail) {
+			return LOP_ERROR_LEXER_UNARY_ARGS;
 		}
 	} else {
-		switch (cur_char(state)) {
-		case '(':
-		case '[':
-		case '{':
-		case ':':
-			token_set_type(state, TOKEN_LIST_OPEN);
-			token_set_list_type(state, cur_char(state));
-			break;
-		case ')':
-		case ']':
-		case '}':
-		case ';':
-			token_set_type(state, TOKEN_LIST_CLOSE);
-			token_set_list_type(state, cur_char(state));
-			break;
-		case '"':
-		case '\'':
-			if (state->stringer.state == STRINGER_CLOSING) {
-				token_set_type(state, TOKEN_LIST_CLOSE);
-				state->stringer.state = STRINGER_IDLE;
-			} else {
-				token_set_type(state, TOKEN_LIST_OPEN);
-				state->stringer.state = STRINGER_GOBBLE;
-				state->stringer.type = cur_char(state);
-			}
-			token_set_list_type(state, cur_char(state));
-			break;
-		case ',':
-			token_set_type(state, TOKEN_COMMA);
-			break;
-		default:
-			int rc = LOP_ERROR_TOKEN_UNKNOWN;
-			if (state->error_cb) {
-				state->error_cb(rc,
-					(union LOP_Error) {
-						.token = {
-							.str = state->string,
-							.len = state->end,
-							.loc = state->loc,
-						}
-					}
-				);
-			}
+		if (last_list->list.head->next && last_list->list.head->next->next != last_list->list.tail) {
+			return LOP_ERROR_LEXER_BINARY_ARGS;
+		}
+	}
+	return 0;
+}
+
+static int operator_close(void)
+{
+	while (last_list_is_operator()) {
+		int rc = operator_close_verify();
+		if (rc < 0) {
+			return rc;
+		}
+		last_list = last_list->parent;
+	}
+
+	return 0;
+}
+
+static int close_vert_colon(void)
+{
+	while (vert_colon_closed()) {
+		int rc;
+
+		last_list = last_list->parent;
+		if (last_list == NULL) {
+			return LOP_ERROR_LEXER_ROOT_CLOSED_BY_INDENT;
+		}
+
+		/* Unary/binary lists must be closed for proper grouping:
+		 * %a: b\nc must be the (list ':;' (unary % (call ':;' b)) c)
+		 * and not the (list ':;' (unary % (call ':;' b) c)) */
+		rc = operator_close();
+		if (rc < 0) {
 			return rc;
 		}
 
-		next_char(state);
+		/* :\n() must not be the call of :; */
+		last_token = NULL;
 	}
 
 	return 0;
 }
 
-static void dump_ast_recursive(struct LOP_ASTNode *root, int level, bool pretty)
+static int push_token(struct LOP_ASTNode *t)
 {
-	if (root->type == LOP_AST_LIST) {
-		printf("(");
-		if (pretty) {
-#define CASE_LIST_TYPE(type, val)	case type: printf("#" val " "); break
-			switch (root->list.type) {
-				CASE_LIST_TYPE(LOP_LIST_TLIST, "tlist");
-				CASE_LIST_TYPE(LOP_LIST_LIST, "list");
-				CASE_LIST_TYPE(LOP_LIST_AREF, "aref");
-				CASE_LIST_TYPE(LOP_LIST_STRUCT, "struct");
-				CASE_LIST_TYPE(LOP_LIST_OPERATOR, "operator");
-				CASE_LIST_TYPE(LOP_LIST_STRING, "string");
-			}
-#undef CASE_LIST_TYPE
-#define CASE_LIST_OP(op, val)	case op: printf("#" val " "); break
-			switch (root->list.op) {
-				CASE_LIST_OP(LOP_LIST_NOP, "nop");
-				CASE_LIST_OP(LOP_LIST_CALL, "call");
-				CASE_LIST_OP(LOP_LIST_BINARY, "binary");
-				CASE_LIST_OP(LOP_LIST_UNARY, "unary");
-			}
-#undef CASE_LIST_OP
-		}
-		for (struct LOP_ASTNode *iter = root->list.head; iter; iter = iter->next) {
-			if (pretty) {
-				printf("\n");
-				for (int i = 0; i < level + 1; i++) {
-					printf("\t");
-				}
-			}
-			if (iter->type == LOP_AST_LIST) {
-				dump_ast_recursive(iter, level + 1, pretty);
-			} else {
-				dump_ast_recursive(iter, level, pretty);
-			}
-			if (iter->next != NULL) {
-				printf(" ");
-			}
-		}
-		if (pretty) {
-			printf("\n");
-			for (int i = 0; i < level; i++) {
-				printf("\t");
-			}
-		}
-		printf(")");
-	} else {
-		if (root->symbol.type == LOP_SYMBOL_STRING) {
-			printf("\"");
-		}
-		printf("%s", root->symbol.value);
-		if (root->symbol.type == LOP_SYMBOL_STRING) {
-			printf("\"");
+	int rc;
+
+	if (t == NULL) {
+		return LOP_ERROR_LEXER_OUT_OF_MEMORY;
+	}
+
+	rc = close_vert_colon();
+	if (rc < 0) {
+		return rc;
+	}
+
+#if 0
+	Here could be something like this:
+
+	if (last_list->type == LOP_TYPE_LIST_COLON) {
+		if (newline_was && continue_was == 0 && last_list->indent + 1 != indent) {
+			return LOP_ERROR_LEXER_INDENTATION;
 		}
 	}
-}
 
-void dump_ast(struct LOP_ASTNode *root, bool pretty)
-{
-	dump_ast_recursive(root, 0, pretty);
-	printf("\n");
-}
+	but, we should allow this:
 
-static void node_append(struct LOP_ASTNode *p, struct LOP_ASTNode *n)
-{
-	assert(n->parent == NULL);
+	a: b:
+			c
+		d
 
-	n->parent = p;
-	if (n->type == LOP_AST_LIST) {
-		n->list.indent = p->list.indent + 1;
-	}
-	n->prev = p->list.tail;
+	just for the sake of user-friendly.
+	But this opens the problem with this:
 
-	if (p->list.count == 0) {
-		p->list.head = p->list.tail = n;
-	} else {
-		p->list.tail->next = n;
-		p->list.tail = n;
-	}
+	a:
+			b
+		c
+	d
 
-	p->list.count++;
-}
+	'c' goes to root list, and 'd' goes to NULL.
+#endif
 
-static struct LOP_ASTNode *node_remove_tail(struct LOP_ASTNode *p)
-{
-	struct LOP_ASTNode *ret = p->list.tail;
+	newline_was = 0;
+	continue_was = 0;
 
-	if (p->list.count == 1) {
-		p->list.head = p->list.tail = NULL;
-	} else {
-		p->list.tail = ret->prev;
-		p->list.tail->next = NULL;
-	}
+	t->parent = last_list;
 
-	ret->prev = NULL;
-	ret->parent = NULL;
+	if (last_token) {
+		if (t->type < LOP_TYPE_LIST_LAST) {
+			t->list.call = 1;
 
-	p->list.count--;
+			t = swap_token(t);
 
-	return ret;
-}
+			last_list = last_token;
 
-static struct LOP_ASTNode *new_node(struct LOP_ASTNode init)
-{
-	struct LOP_ASTNode *n = malloc(sizeof(*n));
+			t->parent = last_list;
 
-	assert(n);
-	*n = init;
-	return n;
-}
-
-static struct LOP_ASTNode *new_node_symbol(struct Token *t)
-{
-	char *value = t->symbol.str ? t->symbol.str : strndup(t->symbol.buf, t->symbol.buf_size);
-
-	assert(value);
-
-	return new_node((struct LOP_ASTNode) {
-		.type = LOP_AST_SYMBOL,
-		.symbol = {
-			.type = t->symbol.type,
-			.value = value,
-		},
-		.loc = t->loc,
-	});
-}
-
-static struct LOP_ASTNode *new_node_list(struct Token *t)
-{
-	return new_node((struct LOP_ASTNode) {
-		.type = LOP_AST_LIST,
-		.list = {
-			.type = t->list_type,
-		},
-		.loc = t->loc,
-	});
-}
-
-static int list_close(struct State *state, struct LOP_ASTNode **cptr, enum LOP_ListType type)
-{
-	assert(cptr);
-	assert(*cptr);
-
-	struct LOP_ASTNode *c = *cptr;
-	struct LOP_ASTNode *p = c->parent;
-	int rc = 0;
-
-	if (p) {
-		p->list.multiline |= c->list.multiline;
-	}
-
-	if ((c->list.type & type) == 0) {
-		rc = LOP_ERROR_TOKEN_UNBALANCED;
-		goto error_report;
-	}
-
-	if (c->list.type & LOP_LIST_OPERATOR) {
-		if (c->list.op == LOP_LIST_BINARY) {
-			if (c->list.count != 3) {
-				rc = LOP_ERROR_TOKEN_BINARY_ARGS;
-				goto error_report;
-			}
-		} else if (c->list.op == LOP_LIST_UNARY) {
-			if (c->list.count != 2) {
-				rc = LOP_ERROR_TOKEN_UNARY_ARGS;
-				goto error_report;
-			}
+			last_list->list.head = last_list->list.tail = t;
+			last_token = NULL;
 		} else {
-			assert(0);
+			return LOP_ERROR_LEXER_SEPARATOR;
+		}
+	} else {
+		if (last_list->list.tail) {
+			last_list->list.tail->next = t;
+		} else {
+			last_list->list.head = t;
+		}
+		last_list->list.tail = t;
+
+		if (t->type < LOP_TYPE_LIST_LAST) {
+			last_list = t;
+			last_token = NULL;
+		} else {
+			last_token = t;
 		}
 	}
 
-	if (p && c->list.type == LOP_LIST_STRING && c->list.op == LOP_LIST_NOP) {
-		assert(c->list.count == 1);
-
-		struct LOP_ASTNode *child = node_remove_tail(c);
-
-		LOP_delAST(node_remove_tail(p));
-		node_append(p, child);
-	}
-
-	*cptr = p;
-
 	return 0;
-
-error_report:
-	if (state->error_cb) {
-		state->error_cb(rc,
-			(union LOP_Error) {
-				.token = {
-					.str = state->string,
-					.len = state->end,
-					.loc = c->loc
-				}
-			}
-		);
-	}
-	return rc;
 }
 
-static struct LOP_OperatorTable *ot_find(struct LOP_OperatorTable *optable, const char *value)
+static int l_str_open()
 {
-	for (struct LOP_OperatorTable *ot = optable; ot->value; ot++) {
-		if (!strcmp(ot->value, value)) {
-			return ot;
+	if (last_token) {
+		int rc = push_token(create_token(LOP_TYPE_LIST_STRING));
+		if (rc < 0) {
+			return rc;
+		}
+	}
+	return push_token(create_token(LOP_TYPE_STRING));
+}
+
+static void set_newline(void)
+{
+	l_line_offset = l_str_offset + yyleng;
+	newline_was = 1;
+}
+
+static int l_str_append()
+{
+	last_token->symbol.value = realloc((char *)last_token->symbol.value, strlen(last_token->symbol.value) + yyleng + 1);
+
+	if (last_token->symbol.value == NULL) {
+		return LOP_ERROR_LEXER_OUT_OF_MEMORY;
+	}
+
+	strcat((char *)last_token->symbol.value, yytext);
+
+	if (yytext[yyleng - 1] == '\n') {
+		set_newline();
+	}
+	return 0;
+}
+
+static int l_str_close()
+{
+	if (last_list->type == LOP_TYPE_LIST_STRING) {
+		last_list = last_list->parent;
+	}
+	last_token = last_list->list.tail;
+	newline_was = 0;
+	return 0;
+}
+
+static struct LOP_Operator *op_find(struct LOP_OperatorTable *table, const char *value, unsigned mask)
+{
+	for (int i = 0; i < table->size; i++) {
+		struct LOP_Operator *op = &table->data[i];
+
+		if ((op->type & mask) == 0) {
+			continue;
+		}
+		if (!strcmp(op->value, value)) {
+			return op;
 		}
 	}
 	return NULL;
 }
 
-int LOP_getAST(struct LOP_ASTNode **root, const char *string, size_t len, struct LOP_OperatorTable *unary, struct LOP_OperatorTable *binary, LOP_error_cb_t error_cb)
+static int l_operator(struct LOP_OperatorTable *operator_table)
 {
-	struct State state = {
-		.loc = {
-			.charno = 1,
-			.lineno = 1,
-		},
-		.string = string,
-		.end = len,
-		.error_cb = error_cb,
-	};
-	struct Token *t = &state.token;
-	*root = new_node_list(&(struct Token) {
-		.list_type = LOP_LIST_TLIST,
-		.loc = state.loc,
-	});
-	struct LOP_ASTNode *c = *root;
-	bool new_line = true;
-	bool no_symbol = false;
-	bool comma = false;
-	int rc = 0;
-	union LOP_Error error;
+	struct LOP_ASTNode *t = create_token(LOP_TYPE_OPERATOR);
+	struct LOP_Operator *op = NULL;
+	int rc;
 
-	if (len == 0) {
-		return 0;
+	if (t == NULL) {
+		return LOP_ERROR_LEXER_OUT_OF_MEMORY;
 	}
 
-	while (true) {
-		rc = next_token(&state);
+	if (last_token) {
+		op = op_find(operator_table, yytext, LOP_OPERATOR_BINARY_MASK);
+		if (op == NULL) {
+			return LOP_ERROR_LEXER_BINARY_UNKNOWN;
+		}
+
+		while (last_list->type > LOP_TYPE_LIST_LAST_CALLABLE) {
+			if (last_list->list.prio > op->prio) {
+				break;
+			}
+			if (last_list->list.prio == op->prio && op->type == LOP_OPERATOR_RTL) {
+				break;
+			}
+			last_list = last_list->parent;
+			last_token = last_list->list.tail;
+		}
+
+		last_token = last_list->list.tail;
+
+		t = swap_token(t);
+
+		rc = push_token(create_token(LOP_TYPE_LIST_OPERATOR_BINARY));
 		if (rc < 0) {
-			goto error;
+			return rc;
 		}
 
-		if (t->type == TOKEN_EOF) {
-			while (c) {
-				rc = list_close(&state, &c, LOP_LIST_TLIST | LOP_LIST_OPERATOR);
-				if (rc < 0) {
-					goto error;
-				}
-			}
-			break;
-		} else if (t->type == TOKEN_COMMIT) {
-			c->list.multiline = true;
-
-			new_line = true;
-			no_symbol = false;
-			comma = false;
-			continue;
-		} else if (t->type == TOKEN_COMMA) {
-			while (c->list.type == LOP_LIST_OPERATOR) {
-				rc = list_close(&state, &c, LOP_LIST_OPERATOR);
-				if (rc < 0) {
-					goto error;
-				}
-				assert(c);
-			}
-
-			new_line = false;
-			no_symbol = false;
-			comma = true;
-			continue;
+		rc = push_token(t);
+		if (rc < 0) {
+			return rc;
 		}
 
-		if (new_line) {
-			if (state.indent < c->list.indent) {
-				while ((c->list.type & (LOP_LIST_TLIST | LOP_LIST_OPERATOR)) && c->list.indent > state.indent + 1) {
-					rc = list_close(&state, &c, LOP_LIST_TLIST | LOP_LIST_OPERATOR);
-					if (rc < 0) {
-						goto error;
-					}
-					assert(c);
-				}
-
-				if (!(t->type == TOKEN_LIST_CLOSE && t->list_type == LOP_LIST_TLIST) && c->list.type == LOP_LIST_TLIST) {
-					rc = list_close(&state, &c, LOP_LIST_TLIST);
-					if (rc < 0) {
-						goto error;
-					}
-					assert(c);
-				}
-
-				while (c->list.type == LOP_LIST_OPERATOR) {
-					if (c->list.op == LOP_LIST_UNARY && c->list.count == 2) {
-						rc = list_close(&state, &c, LOP_LIST_OPERATOR);
-						if (rc < 0) {
-							goto error;
-						}
-						assert(c);
-					} else if (c->list.op == LOP_LIST_BINARY && c->list.count == 3) {
-						rc = list_close(&state, &c, LOP_LIST_OPERATOR);
-						if (rc < 0) {
-							goto error;
-						}
-						assert(c);
-					} else {
-						break;
-					}
-				}
-			} else if (state.indent > c->list.indent) {
-				rc = LOP_ERROR_TOKEN_BAD_INDENT;
-				error = (union LOP_Error) {
-					.token = {
-						.str = state.string,
-						.len = state.end,
-						.loc = state.loc,
-						.expindent = c->list.indent,
-						.actindent = state.indent
-					}
-				};
-				goto error_report;
-			}
+		/* a(b) + c must be (binary + (call a '()' b) c)
+		 * and not the (binary + (call a '()' b c)) */
+		last_list = t->parent;
+		last_token = NULL;
+	} else {
+		op = op_find(operator_table, yytext, LOP_OPERATOR_UNARY);
+		if (op == NULL) {
+			return LOP_ERROR_LEXER_UNARY_UNKNOWN;
 		}
 
-		if (t->type == TOKEN_SYMBOL) {
-			if (new_line && state.indent != c->list.indent) {
-				rc = LOP_ERROR_TOKEN_BAD_INDENT;
-				error = (union LOP_Error) {
-					.token = {
-						.str = state.string,
-						.len = state.end,
-						.loc = state.loc,
-						.expindent = c->list.indent,
-						.actindent = state.indent
-					}
-				};
-				goto error_report;
-			}
+		rc = push_token(t);
+		if (rc < 0) {
+			return rc;
+		}
 
-			if (t->symbol.type != LOP_SYMBOL_OPERATOR && no_symbol) {
-				rc = LOP_ERROR_TOKEN_SEPARATOR;
-				error = (union LOP_Error) {
-					.token = {
-						.str = state.string,
-						.len = state.end,
-						.loc = state.loc
-					}
-				};
-				goto error_report;
-			}
-
-			if (t->symbol.type == LOP_SYMBOL_OPERATOR) {
-				struct LOP_ASTNode *n = new_node_symbol(t);
-				struct SymbolToken *s = &t->symbol;
-
-				while (1) {
-					int len = s->buf_size;
-
-					struct LOP_ASTNode *nc = new_node_list(&(struct Token) { .list_type = LOP_LIST_OPERATOR, .loc = t->loc });
-
-					if ((new_line || comma) || !c->list.tail || (c->list.tail->type == LOP_AST_SYMBOL && c->list.tail->symbol.type == LOP_SYMBOL_OPERATOR)) {
-						struct LOP_OperatorTable *ot;
-
-						while (1) {
-							ot = ot_find(unary, n->symbol.value);
-							if (ot) {
-								break;
-							}
-
-							if (len > 1) {
-								len--;
-								n->symbol.value[len] = 0;
-								continue;
-							}
-
-							rc = LOP_ERROR_TOKEN_UNARY_UNKNOWN;
-							error = (union LOP_Error) {
-								.token = {
-									.str = state.string,
-									.len = state.end,
-									.loc = state.loc,
-									.value = strdup(LOP_symbol_value(n)),
-								}
-							};
-							LOP_delAST(n);
-							LOP_delAST(nc);
-							goto error_report;
-						}
-
-						nc->list.op = LOP_LIST_UNARY;
-						nc->list.prio = ot->prio;
-
-						node_append(nc, n);
-						node_append(c, nc);
-					} else {
-						struct LOP_OperatorTable *ot;
-						struct LOP_ASTNode *lhs;
-
-						while (1) {
-							ot = ot_find(binary, n->symbol.value);
-							if (ot) {
-								break;
-							}
-
-							if (len > 1) {
-								len--;
-								n->symbol.value[len] = 0;
-								continue;;
-							}
-
-							rc = LOP_ERROR_TOKEN_BINARY_UNKNOWN;
-							error = (union LOP_Error) {
-								.token = {
-									.str = state.string,
-									.len = state.end,
-									.loc = state.loc,
-									.value = strdup(LOP_symbol_value(n)),
-								}
-							};
-							LOP_delAST(n);
-							LOP_delAST(nc);
-							goto error_report;
-						}
-
-						while (c->list.type == LOP_LIST_OPERATOR) {
-							if (c->list.prio > ot->prio) {
-								break;
-							} else if (c->list.prio == ot->prio) {
-								if (ot->type == LOP_OPERATOR_RIGHT) {
-									break;
-								}
-							}
-
-							rc = list_close(&state, &c, LOP_LIST_OPERATOR);
-							if (rc < 0) {
-								goto error;
-							}
-							assert(c);
-						}
-
-						lhs = node_remove_tail(c);
-
-						nc->list.op = LOP_LIST_BINARY;
-						nc->list.prio = ot->prio;
-
-						node_append(nc, n);
-						node_append(nc, lhs);
-						node_append(c, nc);
-					}
-
-					if (c->list.type == LOP_LIST_OPERATOR) {
-						nc->list.indent = c->list.indent;
-					}
-
-					c = nc;
-
-					no_symbol = false;
-					comma = true;
-
-					if (len == s->buf_size) {
-						break;
-					}
-
-					s->buf += len;
-					s->buf_size -= len;
-					t->loc.charno += len - 1;
-					n = new_node_symbol(t);
-				}
-			} else {
-				node_append(c, new_node_symbol(t));
-				no_symbol = true;
-				comma = false;
-			}
-
-			new_line = false;
-		} else if (t->type == TOKEN_LIST_OPEN) {
-			if (new_line && state.indent != c->list.indent) {
-				rc = LOP_ERROR_TOKEN_BAD_INDENT;
-				error = (union LOP_Error) {
-					.token = {
-						.str = state.string,
-						.len = state.end,
-						.loc = state.loc,
-						.expindent = c->list.indent,
-						.actindent = state.indent
-					}
-				};
-				goto error_report;
-			}
-
-			struct LOP_ASTNode *nc = new_node_list(t);
-
-			if (c->list.tail && !(new_line || comma)) {
-				while (c->list.type == LOP_LIST_OPERATOR && c->list.prio == 0) {
-					rc = list_close(&state, &c, LOP_LIST_OPERATOR);
-					if (rc < 0) {
-						goto error;
-					}
-					assert(c);
-				}
-
-				struct LOP_ASTNode *op = node_remove_tail(c);
-
-				nc->list.op = LOP_LIST_CALL;
-				node_append(nc, op);
-
-				comma = true;
-			} else {
-				comma = false;
-			}
-
-			node_append(c, nc);
-
-			c = nc;
-
-			if (state.stringer.state) {
-				state.stringer.stop_indent = c->list.indent;
-			}
-
-			new_line = false;
-			no_symbol = false;
-		} else if (t->type == TOKEN_LIST_CLOSE) {
-			while (c->list.type & (LOP_LIST_TLIST | LOP_LIST_OPERATOR)) {
-				if (t->list_type == LOP_LIST_TLIST && c->list.type == LOP_LIST_TLIST && (!c->list.multiline || state.indent == c->list.indent - 1)) {
-					break;
-				}
-				rc = list_close(&state, &c, LOP_LIST_TLIST | LOP_LIST_OPERATOR);
-				if (rc < 0) {
-					goto error;
-				}
-				if (!c) {
-					rc = LOP_ERROR_TOKEN_UNBALANCED;
-					error = (union LOP_Error) {
-						.token = {
-							.str = state.string,
-							.len = state.end,
-							.loc = state.loc
-						}
-					};
-					goto error_report;
-				}
-			}
-
-			if (c->list.multiline && state.indent != c->list.indent - 1) {
-				rc = LOP_ERROR_TOKEN_BAD_INDENT_CLOSE;
-				error = (union LOP_Error) {
-					.token = {
-						.str = state.string,
-						.len = state.end,
-						.loc = state.loc,
-						.expindent = c->list.indent - 1,
-						.actindent = state.indent
-					}
-				};
-				goto error_report;
-			}
-
-			rc = list_close(&state, &c, t->list_type);
-			if (rc < 0) {
-				goto error;
-			}
-			assert(c);
-
-			new_line = false;
-			no_symbol = true;
-			comma = false;
-		} else {
-			assert(0);
+		rc = push_token(create_token(LOP_TYPE_LIST_OPERATOR_UNARY));
+		if (rc < 0) {
+			return rc;
 		}
 	}
 
-	return rc;
-error_report:
-	if (state.error_cb) {
-		state.error_cb(rc, error);
-	}
-error:
-	LOP_delAST(*root);
-	*root = NULL;
-	return rc;
+	last_list->list.prio = op->prio;
+	return 0;
 }
 
-void LOP_delAST(struct LOP_ASTNode *root)
+static int l_push_token(enum LOP_ASTNodeType t)
 {
-	if (root->type == LOP_AST_LIST) {
-		for (struct LOP_ASTNode *n = LOP_list_head(root); n;) {
-			struct LOP_ASTNode *nn = n->next;
-			LOP_delAST(n);
-			n = nn;
+	if (t < LOP_TYPE_LIST_LAST_CALLABLE && last_list->type > LOP_TYPE_LIST_LAST_CALLABLE) {
+		/* Priority 0 is needed to have these possibilites:
+		 * 1. $a() => (call '()' (unary (operator $) (identifier a)))
+		 * 2. -b() => (unary (call '()' (operator $) (identifier b)))
+		 * 3. a - b() => (binary (operator -) (identifier a) (call '()' (identifier b)))
+		 * 3. a->b() => (call '()' (binary (operator ->) (identifier a) (identifier b)))
+		 */
+		if (last_list->list.prio == 0) {
+			last_list = last_list->parent;
+			last_token = last_list->list.tail;
+		}
+	}
+
+	return push_token(create_token(t));
+}
+
+static int l_list_close(enum LOP_ASTNodeType t)
+{
+	if (t == LOP_TYPE_LIST_COLON) {
+		int rc;
+
+		rc = operator_close();
+		if (rc < 0) {
+			return rc;
+		}
+
+		rc = close_vert_colon();
+		if (rc < 0) {
+			return rc;
 		}
 	} else {
-		free(root->symbol.value);
+		while (1) {
+			if (last_list_is_operator()) {
+				int rc = operator_close_verify();
+				if (rc < 0) {
+					return rc;
+				}
+			} else if (last_list->type != LOP_TYPE_LIST_COLON) {
+				break;
+			}
+			last_list = last_list->parent;
+			if (last_list == NULL) {
+				return LOP_ERROR_LEXER_UNBALANCED;
+			}
+		}
 	}
-	free(root);
+
+	if (last_list->type != t) {
+		return LOP_ERROR_LEXER_UNBALANCED;
+	}
+
+	last_list = last_list->parent;
+	if (last_list == NULL) {
+		return LOP_ERROR_LEXER_ROOT_CLOSED;
+	}
+	last_token = last_list->list.tail;
+
+	newline_was = 0;
+	return 0;
 }
 
-const char *LOP_symbol_value(struct LOP_ASTNode *n)
+static int l_newline()
 {
-	assert(n->type == LOP_AST_SYMBOL);
+	if (continue_was == 0) {
+		int rc = operator_close();
+		if (rc < 0) {
+			return rc;
+		}
+		last_token = NULL;
+	}
 
-	return n->symbol.value;
+	indent = 0;
+	set_newline();
+	return 0;
 }
 
-struct LOP_ASTNode *LOP_list_head(struct LOP_ASTNode *n)
+static int l_comma()
 {
-	assert(n->type == LOP_AST_LIST);
+	if (!last_list_is_operator() && last_token == NULL) {
+		int rc;
 
-	return n->list.head;
+		rc = push_token(create_token(LOP_TYPE_NIL));
+		if (rc < 0) {
+			return rc;
+		}
+	}
+
+	last_token = NULL;
+	return operator_close();
 }
 
-struct LOP_ASTNode *LOP_list_tail(struct LOP_ASTNode *n)
-{
-	assert(n->type == LOP_AST_LIST);
-
-	return n->list.tail;
+int yywrap() {
+	return 1;
 }
 
-static void error_show_string(const char *ptr, size_t len, struct LOP_Location loc)
+static int finish(void)
 {
-	size_t lineno = 1;
-	size_t i = 0;
+	if (last_token && last_token->type == LOP_TYPE_STRING) {
+		last_loc = last_token->loc;
+		return LOP_ERROR_LEXER_UNBALANCED;
+	}
 
-	for (; i < len; i++) {
-		if (lineno == loc.lineno) {
+	while (last_list) {
+		if (last_list_is_operator()) {
+			int rc = operator_close_verify();
+			if (rc < 0) {
+				return rc;
+			}
+		} else if (last_list->type != LOP_TYPE_LIST_COLON) {
+			last_loc = last_list->loc;
+			return LOP_ERROR_LEXER_UNBALANCED;
+		}
+		last_list = last_list->parent;
+	}
+
+	return 0;
+}
+
+int LOP_getAST(struct LOP_ASTNode **root, const char *filename, const char *string, size_t len, struct LOP_OperatorTable *operator_table)
+{
+	enum Token t;
+	int rc = 0;
+
+	yylineno = 1;
+	indent = -1;
+	newline_was = 1;
+	continue_was = 0;
+	l_str_offset = 0;
+	l_line_offset = 0;
+	memset(&last_loc, 0, sizeof(last_loc));
+	*root = last_list = create_token(LOP_TYPE_LIST_COLON);
+	last_token = NULL;
+	indent = 0;
+
+	yy_scan_bytes(string, len);
+
+	while (rc == 0 && (t = yylex())) {
+		switch (t) {
+		case L_DIGIT:
+		case L_FLOAT:
+		case L_BNUMBER:
+			last_loc = get_loc();
+			rc = l_push_token(LOP_TYPE_NUMBER);
 			break;
-		}
-		if (ptr[i] == '\n') {
-			lineno++;
-			continue;
-		}
-	}
-
-	if (i >= len) {
-		fprintf(stderr, "at the end of file\n");
-		return;
-	}
-
-	fprintf(stderr, "%li: ", lineno);
-	for (; i < len; i++) {
-		if (ptr[i] == '\n') {
+		case L_ID:
+			last_loc = get_loc();
+			rc = l_push_token(LOP_TYPE_ID);
 			break;
-		}
-		fprintf(stderr, "%c", ptr[i]);
-	}
-	fprintf(stderr, "\n");
-}
-
-void LOP_default_error_cb(enum LOP_ErrorType type, union LOP_Error error)
-{
-	switch (type) {
-	case LOP_ERROR_TOKEN_UNKNOWN:
-		fprintf(stderr, "Unknown symbol at:\n");
-		error_show_string(error.token.str, error.token.len, error.token.loc);
-		break;
-	case LOP_ERROR_TOKEN_BAD_INDENT:
-		fprintf(stderr, "Bad indent at:\n");
-		error_show_string(error.token.str, error.token.len, error.token.loc);
-		fprintf(stderr, "Expected indent: %i\n", error.token.expindent);
-		fprintf(stderr, "Actual indent: %i\n", error.token.actindent);
-		break;
-	case LOP_ERROR_TOKEN_BAD_INDENT_CLOSE:
-		fprintf(stderr, "Bad indent for closing at:\n");
-		error_show_string(error.token.str, error.token.len, error.token.loc);
-		fprintf(stderr, "Expected indent: %i\n", error.token.expindent);
-		fprintf(stderr, "Actual indent: %i\n", error.token.actindent);
-		break;
-	case LOP_ERROR_TOKEN_UNBALANCED:
-		fprintf(stderr, "Unbalanced list at:\n");
-		error_show_string(error.token.str, error.token.len, error.token.loc);
-		break;
-	case LOP_ERROR_TOKEN_SEPARATOR:
-		fprintf(stderr, "Separator expected at:\n");
-		error_show_string(error.token.str, error.token.len, error.token.loc);
-		break;
-	case LOP_ERROR_TOKEN_UNARY_ARGS:
-		fprintf(stderr, "Unary operator expects exactly 1 argument at:\n");
-		error_show_string(error.token.str, error.token.len, error.token.loc);
-		break;
-	case LOP_ERROR_TOKEN_UNARY_UNKNOWN:
-		fprintf(stderr, "Unknown unary operator '%s' at:\n", error.token.value);
-		error_show_string(error.token.str, error.token.len, error.token.loc);
-		free((void *)error.token.value);
-		break;
-	case LOP_ERROR_TOKEN_BINARY_ARGS:
-		fprintf(stderr, "Binary operator expects exactly 2 arguments at:\n");
-		error_show_string(error.token.str, error.token.len, error.token.loc);
-		break;
-	case LOP_ERROR_TOKEN_BINARY_UNKNOWN:
-		fprintf(stderr, "Unknown binary operator '%s' at:\n", error.token.value);
-		error_show_string(error.token.str, error.token.len, error.token.loc);
-		free((void *)error.token.value);
-		break;
-	case LOP_ERROR_SCHEMA_SYNTAX:
-		if (!error.syntax.node) {
-			fprintf(stderr, "Syntax error for the whole file\n");
+		case L_SQUOTE:
+		case L_DQUOTE:
+		case L_QQUOTE:
+			last_loc = get_loc();
+			rc = l_str_open();
 			break;
+		case L_STR_APPEND:
+			last_loc = get_loc();
+			rc = l_str_append();
+			break;
+		case L_STR_CONTINUE:
+			break;
+		case L_QUOTE_CLOSE:
+			last_loc = get_loc();
+			rc = l_str_close();
+			break;
+		case L_COMMENT:
+			break;
+		case L_OPERATOR:
+			last_loc = get_loc();
+			rc = l_operator(operator_table);
+			break;
+		case L_LIST_OPEN:
+			last_loc = get_loc();
+			rc = l_push_token(LOP_TYPE_LIST_ROUND);
+			break;
+		case L_CLIST_OPEN:
+			last_loc = get_loc();
+			rc = l_push_token(LOP_TYPE_LIST_CURLY);
+			break;
+		case L_BLIST_OPEN:
+			last_loc = get_loc();
+			rc = l_push_token(LOP_TYPE_LIST_SQUARE);
+			break;
+		case L_TLIST_OPEN:
+			last_loc = get_loc();
+			rc = l_push_token(LOP_TYPE_LIST_COLON);
+			break;
+		case L_LIST_CLOSE:
+			last_loc = get_loc();
+			rc = l_list_close(LOP_TYPE_LIST_ROUND);
+			break;
+		case L_CLIST_CLOSE:
+			last_loc = get_loc();
+			rc = l_list_close(LOP_TYPE_LIST_CURLY);
+			break;
+		case L_BLIST_CLOSE:
+			last_loc = get_loc();
+			rc = l_list_close(LOP_TYPE_LIST_SQUARE);
+			break;
+		case L_TLIST_CLOSE:
+			last_loc = get_loc();
+			rc = l_list_close(LOP_TYPE_LIST_COLON);
+			break;
+		case L_INDENT:
+			if (newline_was) {
+				indent++;
+			}
+			break;
+		case L_NEWLINE:
+			rc = l_newline();
+			break;
+		case L_CONTINUE:
+			continue_was = 1;
+			break;
+		case L_COMMA:
+			rc = l_comma();
+			break;
+		case L_WHITESPACE:
+			break;
+		case L_UNKNOWN:
+			rc = LOP_ERROR_LEXER_UNKNOWN;
+			break;
+		default:
+			assert(0);
 		}
-		fprintf(stderr, "Syntax error at:\n");
-		error_show_string(error.syntax.src, strlen(error.syntax.src), error.syntax.node->loc);
-		break;
-	case LOP_ERROR_SCHEMA_MISSING_RULE:
-		fprintf(stderr, "Rule '%s' not found\n", error.str);
-		break;
-	case LOP_ERROR_SCHEMA_MISSING_HANDLER:
-		fprintf(stderr, "Handler '%s' not found\n", error.str);
-		break;
-	case LOP_ERROR_SCHEMA_MISSING_TOP:
-		fprintf(stderr, "Top rule '%s' not found\n", error.str);
-		break;
+
+		l_str_offset += yyleng;
 	}
+
+	if (rc == 0) {
+		rc = finish();
+	}
+
+	if (rc < 0) {
+		l_report(rc, filename, string, len, last_loc);
+	}
+
+	return rc;
 }
