@@ -5,14 +5,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-struct LOP_ASTNode;
-struct LOP;
-struct LOP_HandlerList;
-struct LOP_CB;
-
-typedef int (*LOP_handler_t)(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg);
-typedef int (*LOP_resolve_t)(struct LOP *lop, const char *handler_name, struct LOP_CB *cb);
-
 struct LOP_Location {
 	int lineno;
 	int charno;
@@ -88,9 +80,10 @@ struct LOP_OperatorTable {
 	int size;
 };
 
-struct LOP_CB {
-	LOP_handler_t func;
-	void *arg;
+struct LOP_Handler {
+	const char *key;
+	struct LOP_ASTNode *n;
+	int delta;
 };
 
 struct LOP_HandlerList {
@@ -98,17 +91,24 @@ struct LOP_HandlerList {
 	int count;
 };
 
-struct LOP_Handler {
-	struct SchemaNode *sn;
-	struct LOP_ASTNode *n;
-	struct LOP_HandlerList hl;
+struct LOP_Schema {
+	/* You must fill these */
+	const char *filename;
+
+	/* LOP will fill these */
+	struct KV *kv;
+	struct LOP_OperatorTable operator_table;
 };
 
 struct LOP {
-	struct KV *kv;
-	struct LOP_OperatorTable operator_table;
+	/* You must fill these */
+	struct LOP_Schema *schema;
+	const char *top_rule_name;
+	const char *filename;
 
-	LOP_resolve_t resolve;
+	/* LOP will fill these */
+	struct LOP_ASTNode *ast;
+	struct LOP_HandlerList hl;
 };
 
 enum LOP_ErrorType {
@@ -125,7 +125,6 @@ enum LOP_ErrorType {
 
 	LOP_ERROR_SCHEMA_SYNTAX,
 	LOP_ERROR_SCHEMA_MISSING_RULE,
-	LOP_ERROR_SCHEMA_MISSING_HANDLER,
 	LOP_ERROR_SCHEMA_MISSING_TOP,
 };
 
@@ -141,14 +140,10 @@ struct LOP_ASTNode *LOP_list_head(struct LOP_ASTNode *n);
 struct LOP_ASTNode *LOP_list_tail(struct LOP_ASTNode *n);
 
 /* Schema functions */
-int LOP_handler_eval(struct LOP_HandlerList hl, unsigned child, void *param);
-bool LOP_handler_evalable(struct LOP_HandlerList hl, unsigned child);
+int LOP_schema_init(struct LOP_Schema *schema, const char *src, size_t len);
+void LOP_schema_deinit(struct LOP_Schema *schema);
 
-int LOP_schema_init(struct LOP *lop, const char *filename, const char *user_schema, size_t len);
-int LOP_schema_parse_source(void *ctx, struct LOP *lop, const char *filename, const char *string, size_t len, const char *top_rule_name);
-void LOP_schema_deinit(struct LOP *lop);
-
-/* Standard callbacks */
-int LOP_cb_default(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg);
+int LOP_init(struct LOP *lop, const char *src, size_t len);
+void LOP_deinit(struct LOP *lop);
 
 #endif // LOP_H

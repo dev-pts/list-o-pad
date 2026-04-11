@@ -4,51 +4,99 @@
 #include <FileMap.h>
 #include <LOP.h>
 
-#define ARRAY_SIZE(a)	(sizeof(a) / sizeof(*(a)))
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof(*(a)))
 
-static int cb_expr(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg)
+typedef int (*cb_t)(struct LOP_ASTNode *n, int delta);
+
+static struct LOP_HandlerList *hl;
+static int hl_index;
+
+static cb_t resolve(int index);
+
+static int node_inside(void)
+{
+	if (hl_index >= hl->count) {
+		return 0;
+	}
+
+	return hl->handler[hl_index].delta != -1;
+}
+
+static int eval_node(void)
+{
+	if (hl_index >= hl->count) {
+		return -1;
+	}
+
+	cb_t cb = resolve(hl_index);
+	struct LOP_ASTNode *n = hl->handler[hl_index].n;
+	int delta = hl->handler[hl_index].delta;
+
+	hl_index++;
+
+	if (hl_index >= hl->count) {
+		return -1;
+	}
+
+	if (cb) {
+		int rc = cb(n, delta);
+
+		if (rc) {
+			return rc;
+		}
+	}
+
+	if (delta > 0) {
+		hl_index++;
+	}
+
+	return 0;
+}
+
+static int cb_expr(struct LOP_ASTNode *n, int delta)
 {
 	printf("( ");
-	LOP_cb_default(hl, n, param, NULL);
+	while (node_inside()) {
+		eval_node();
+	}
 	printf(") ");
 	return 0;
 }
 
-static int cb_define(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg)
+static int cb_define(struct LOP_ASTNode *n, int delta)
 {
-	printf("define ");
-	LOP_cb_default(hl, n, param, NULL);
-	return 0;
-}
-
-static int cb_lambda(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg)
-{
-	printf("( lambda ( ");
-	LOP_cb_default(hl, n, param, NULL);
+	printf("( define ");
+	while (node_inside()) {
+		eval_node();
+	}
 	printf(") ");
 	return 0;
 }
 
-static int cb_lambda_close(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg)
+static int cb_lambda(struct LOP_ASTNode *n, int delta)
 {
-	LOP_cb_default(hl, n, param, NULL);
+	eval_node();
+	printf("( lambda ");
+	while (node_inside()) {
+		eval_node();
+	}
 	printf(") ");
 	return 0;
 }
 
-static int cb_symbol(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg)
+static int cb_symbol(struct LOP_ASTNode *n, int delta)
 {
 	printf("%s ", LOP_symbol_value(n));
 	return 0;
 }
 
-static int cb_string(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg)
+static int cb_string(struct LOP_ASTNode *n, int delta)
 {
 	printf("\"%s\" ", LOP_symbol_value(n));
 	return 0;
 }
 
-static int cb_operator(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg)
+static int cb_operator(struct LOP_ASTNode *n, int delta)
 {
 	const char *val = LOP_symbol_value(n);
 
@@ -69,24 +117,25 @@ static int cb_operator(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *p
 	return 0;
 }
 
-static int cb_if(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg)
+static int cb_if(struct LOP_ASTNode *n, int delta)
 {
-	printf("if ");
-	LOP_handler_eval(hl, 1, param);
-	LOP_handler_eval(hl, 2, param);
+	printf("( if ");
+	while (node_inside()) {
+		eval_node();
+	}
+	printf(") ");
 	return 0;
 }
 
-static int resolve(struct LOP *lop, const char *key, struct LOP_CB *cb)
+static cb_t resolve(int index)
 {
 	static struct {
 		const char *key;
-		LOP_handler_t handler;
+		cb_t handler;
 	} entries[] = {
 		{ "expr", cb_expr },
 		{ "define", cb_define },
 		{ "lambda", cb_lambda },
-		{ "lambda_close", cb_lambda_close },
 		{ "symbol", cb_symbol },
 		{ "string", cb_string },
 		{ "operator", cb_operator },
@@ -94,31 +143,41 @@ static int resolve(struct LOP *lop, const char *key, struct LOP_CB *cb)
 	};
 
 	for (int i = 0; i < ARRAY_SIZE(entries); i++) {
-		if (!strcmp(key, entries[i].key)) {
-			cb->func = entries[i].handler;
-			return 0;
+		if (!strcmp(hl->handler[index].key, entries[i].key)) {
+			return entries[i].handler;
 		}
 	}
-	return -1;
+	return NULL;
 }
 
 int main(int argc, char *argv[])
 {
-	struct LOP lop = {
-		.resolve = resolve,
-		.error_cb = LOP_default_error_cb,
+	struct LOP_Schema schema = {
+		.filename = argv[1],
 	};
-	struct FileMap schema = map_file(argv[1]);
+	struct FileMap schema_str = map_file(argv[1]);
 	struct FileMap source = map_file(argv[2]);
 
-	if (!LOP_schema_init(&lop, schema.data, schema.len)) {
-		LOP_schema_parse_source(NULL, &lop, source.data, source.len, argv[3]);
+	if (!LOP_schema_init(&schema, schema_str.data, schema_str.len)) {
+		struct LOP lop = {
+			.schema = &schema,
+			.top_rule_name = argv[3],
+			.filename = argv[2],
+		};
+
+		LOP_init(&lop, source.data, source.len);
+
+		hl = &lop.hl;
+
+		while (node_inside()) {
+			eval_node();
+		}
+
+		LOP_deinit(&lop);
 	}
-	LOP_schema_deinit(&lop);
+	LOP_schema_deinit(&schema);
 
-	printf("\n");
-
-	unmap_file(schema);
+	unmap_file(schema_str);
 	unmap_file(source);
 	return 0;
 }

@@ -1,86 +1,337 @@
 import sys
 import LOP
+import ctypes
 
-class Context:
-    def module(self, hl, n, param, cb_arg):
-        sys.stdout.write('module ')
-        LOP.LOP_handler_eval(hl, 1, None)
-        sys.stdout.write('(')
-        LOP.LOP_handler_eval(hl, 2, None)
-        sys.stdout.write(');\n')
-        LOP.LOP_handler_eval(hl, 3, None)
-        sys.stdout.write('endmodule')
-        return 0
-    def str(self, hl, n, param, cb_arg):
-        sys.stdout.write(LOP.LOP_symbol_value(n).decode() + ' ')
-        return 0
-    def port(self, hl, n, param, cb_arg):
-        LOP.LOP_handler_eval(hl, 1, None)
-        LOP.LOP_handler_eval(hl, 0, None)
-        return 0
-    def list(self, hl, n, param, cb_arg):
-        for i in range(0, hl.count - 1):
-            LOP.LOP_handler_eval(hl, i, None)
-            sys.stdout.write(', ')
-        LOP.LOP_handler_eval(hl, hl.count - 1, None)
-        return 0
-    def listn(self, hl, n, param, cb_arg):
-        for i in range(0, hl.count):
-            LOP.LOP_handler_eval(hl, i, None)
-            sys.stdout.write(';\n')
-        return 0
-    def dir(self, hl, n, param, cb_arg):
-        sys.stdout.write(LOP.LOP_symbol_value(n).decode() + 'put ')
-        return 0
-    def dim(self, hl, n, param, cb_arg):
-        hi = int(LOP.LOP_symbol_value(n).decode())
-        sys.stdout.write('[' + str(hi - 1) + ':0] ')
-        return 0
-    def bus(self, hl, n, param, cb_arg):
-        sys.stdout.write('{ ')
-        LOP.LOP_handler_eval(hl, 0, None)
-        sys.stdout.write('} ')
-        return 0
-    def unary(self, hl, n, param, cb_arg):
-        LOP.LOP_handler_eval(hl, 0, None)
-        LOP.LOP_handler_eval(hl, 1, None)
-        return 0
-    def binary(self, hl, n, param, cb_arg):
-        LOP.LOP_handler_eval(hl, 1, None)
-        LOP.LOP_handler_eval(hl, 0, None)
-        LOP.LOP_handler_eval(hl, 2, None)
-        return 0
-    def parens(self, hl, n, param, cb_arg):
-        sys.stdout.write('(')
-        LOP.LOP_handler_eval(hl, 0, None)
-        sys.stdout.write(') ')
-        return 0
-    def assign(self, hl, n, param, cb_arg):
-        sys.stdout.write('assign ')
-        self.binary(hl, None, None, None);
-        return 0
+class Module:
+    def __init__(self):
+        self._name = None
+        self._port = []
+        self._stmt = []
 
-ctx = Context()
+    def set_name(self, name):
+        self._name = name
 
-gc_protect = []
+    def add_port(self, port):
+        self._port.append(port)
 
-@LOP.LOP_resolve_t
-def resolve(lop, key, cb):
-    func = getattr(ctx, str(key))
-    cb[0].func = LOP.LOP_handler_t(func)
-    gc_protect.append(cb[0].func)
-    return 0
+    def add_stmt(self, stmt):
+        self._stmt.append(stmt)
 
-lop = LOP.LOP()
-lop.resolve = resolve
+    def __str__(self):
+        ret = f'module {self._name}('
+        ret += ', '.join([i._name for i in self._port])
+        ret += ');\n'
+        for i in self._port:
+            ret += i._dir + 'put wire '
+            if i._width > 1:
+                ret += f'[{i._width - 1}:0] '
+            ret += i._name + ';\n'
+        for i in self._stmt:
+            ret += str(i)
+        ret += 'endmodule\n'
+        return ret
 
-schema = LOP.map_file('schema.lop')
-rc = LOP.LOP_schema_init(lop, 'schema.lop', schema.data, schema.len)
-LOP.unmap_file(schema)
+class Port:
+    def __init__(self):
+        self._name = None
+        self._dir = None
+        self._width = 1
+
+    def set_name(self, name):
+        self._name = name
+
+    def set_dir(self, dir):
+        self._dir = dir
+
+    def set_width(self, width):
+        self._width = width
+
+class Statement:
+    def __init__(self):
+        self._stmt = None
+
+    def set_stmt(self, i):
+        self._stmt = i
+
+    def __str__(self):
+        return 'assign ' + str(self._stmt) + ';\n'
+
+class Assign:
+    def __init__(self):
+        self._lhs = None
+        self._rhs = None
+
+    def set_lhs(self, lhs):
+        self._lhs = lhs
+
+    def set_rhs(self, rhs):
+        self._rhs = rhs
+
+    def __str__(self):
+        return str(self._lhs) + ' = ' + str(self._rhs)
+
+class Bus:
+    def __init__(self):
+        self._item = []
+
+    def add(self, item):
+        self._item.append(item)
+
+    def __str__(self):
+        return '{ ' + ', '.join([str(i) for i in self._item]) + ' }'
+
+class Binary:
+    def __init__(self):
+        self._op = None
+        self._op1 = None
+        self._op2 = None
+
+    def set_op(self, i):
+        self._op = i
+
+    def set_op1(self, i):
+        self._op1 = i
+
+    def set_op2(self, i):
+        self._op2 = i
+
+    def __str__(self):
+        return str(self._op1) + ' ' + str(self._op) + ' ' + str(self._op2)
+
+SYNTAX = []
+PARSER = []
+
+def parser(syntax):
+    def decorator(cls):
+        SYNTAX.append(syntax)
+        PARSER.append(cls)
+        return cls
+    return decorator
+
+@parser("""
+module:
+	tree: @module_create
+		identifier: 'module'
+		identifier: @module_set_name
+		tree:
+			identifier: 'port'
+			listof:
+				$port: @module_add_port
+		listof:
+			$statement: @module_add_stmt
+""")
+class ParseModule:
+    def module_create(stack, ast, delta):
+        if delta > 0:
+            stack.append(Module())
+
+    def module_set_name(stack, ast, delta):
+        stack[-1].set_name(LOP.LOP_symbol_value(ast).decode())
+
+    def module_add_port(stack, ast, delta):
+        if delta < 0:
+            i = stack.pop()
+            stack[-1].add_port(i)
+
+    def module_add_stmt(stack, ast, delta):
+        if delta < 0:
+            i = stack.pop()
+            stack[-1].add_stmt(i)
+
+@parser("""
+port:
+	tree: @port_create
+		identifier: @port_set_name
+		oneof:
+			$direction: @port_set_dir
+			aref:
+				$direction: @port_set_dir
+				number: @port_set_width
+
+direction:
+	oneof:
+		identifier: 'in'
+		identifier: 'out'
+""")
+class ParsePort:
+    def port_create(stack, ast, delta):
+        if delta > 0:
+            stack.append(Port())
+
+    def port_set_name(stack, ast, delta):
+        stack[-1].set_name(LOP.LOP_symbol_value(ast).decode())
+
+    def port_set_dir(stack, ast, delta):
+        if delta > 0:
+            stack[-1].set_dir(LOP.LOP_symbol_value(ast).decode())
+
+    def port_set_width(stack, ast, delta):
+        stack[-1].set_width(int(LOP.LOP_symbol_value(ast).decode()))
+
+@parser("""
+statement:
+	oneof: @stmt_create
+		$stmt_assign: @stmt_set
+""")
+class ParseStatement:
+    def stmt_create(stack, ast, delta):
+        if delta > 0:
+            stack.append(Statement())
+
+    def stmt_set(stack, ast, delta):
+        if delta < 0:
+            i = stack.pop()
+            stack[-1].set_stmt(i)
+
+@parser("""
+stmt_assign:
+	binary: @assign_create
+		operator: '='
+		$lhs: @assign_set_lhs
+		$expr: @assign_set_rhs
+
+lhs:
+	oneof:
+		identifier: @identifier
+		$bus
+""")
+class ParseAssign:
+    def assign_create(stack, ast, delta):
+        if delta > 0:
+            stack.append(Assign())
+
+    def assign_set_lhs(stack, ast, delta):
+        if delta < 0:
+            i = stack.pop()
+            stack[-1].set_lhs(i)
+
+    def assign_set_rhs(stack, ast, delta):
+        if delta < 0:
+            i = stack.pop()
+            stack[-1].set_rhs(i)
+
+@parser("""
+bus:
+	slist: @bus_create
+		listof:
+			$expr: @bus_add
+""")
+class ParseBus:
+    def bus_create(stack, ast, delta):
+        if delta > 0:
+            stack.append(Bus())
+
+    def bus_add(stack, ast, delta):
+        if delta < 0:
+            i = stack.pop()
+            stack[-1].add(i)
+
+@parser("""
+expr:
+	oneof:
+		identifier: @identifier
+		number: @number
+		unary: @unary
+			operator: @operator
+			$expr
+		binary: @binary
+			operator: @binary_set_op
+			$expr: @binary_set_op1
+			$expr: @binary_set_op2
+		$bus
+		list:
+			$expr
+""")
+class ParserExpr:
+    def identifier(stack, ast, delta):
+        stack.append(LOP.LOP_symbol_value(ast).decode())
+
+    def binary(stack, ast, delta):
+        if delta > 0:
+            stack.append(Binary())
+
+    def binary_set_op(stack, ast, delta):
+        stack[-1].set_op(LOP.LOP_symbol_value(ast).decode())
+
+    def binary_set_op1(stack, ast, delta):
+        if delta < 0:
+            i = stack.pop()
+            stack[-1].set_op1(i)
+
+    def binary_set_op2(stack, ast, delta):
+        if delta < 0:
+            i = stack.pop()
+            stack[-1].set_op2(i)
+
+@parser("""
+top:
+	tlist:
+		listof:
+			$module
+""")
+class Top:
+    pass
+
+schema_str = """
+: #operators
+	{
+	}
+
+	unary:
+		'++', '--'
+		'!', '~'
+		'+', '-'
+		'*', '/'
+		'&', '|', '^'
+
+	binary_left_to_right: '*', '/', '%'
+	binary_left_to_right: '+', '-'
+	binary_left_to_right: '<<', '>>'
+	binary_left_to_right: '<', '>', '<=', '>='
+	binary_left_to_right: '==', '!='
+	binary_left_to_right: '&'
+	binary_left_to_right: '^'
+	binary_left_to_right: '|'
+	binary_left_to_right: '&&'
+	binary_left_to_right: '||'
+
+	binary_right_to_left:
+		'='
+		'+=', '-='
+		'*=', '/=', '%='
+		'>>=', '<<='
+		'~=', '&=', '|=', '^='
+"""
+
+schema_str += ''.join(SYNTAX)
+
+schema = LOP.LOP_Schema()
+schema.filename = LOP.String('schema.lop'.encode())
+
+rc = LOP.LOP_schema_init(schema, schema_str, len(schema_str))
 
 if rc == 0:
+    lop = LOP.LOP()
+    lop.schema = ctypes.pointer(schema)
+    lop.top_rule_name = LOP.String('top'.encode())
+    lop.filename = LOP.String('example.lop'.encode())
+
     src = LOP.map_file('example.lop')
-    LOP.LOP_schema_parse_source(None, lop, 'example.lop', src.data, src.len, 'top')
+    LOP.LOP_init(lop, src.data, src.len)
     LOP.unmap_file(src)
 
-LOP.LOP_schema_deinit(lop)
+    stack = []
+
+    for i in range(lop.hl.count):
+        for j in PARSER:
+            if hasattr(j, str(lop.hl.handler[i].key)):
+                func = getattr(j, str(lop.hl.handler[i].key))
+                func(stack, lop.hl.handler[i].n, lop.hl.handler[i].delta)
+                break
+
+    for i in stack:
+        print(i)
+
+    LOP.LOP_deinit(lop)
+
+LOP.LOP_schema_deinit(schema)

@@ -99,15 +99,37 @@ static struct LOP_ASTNode *create_token(enum LOP_ASTNodeType type)
 
 static struct LOP_ASTNode *swap_token(struct LOP_ASTNode *t)
 {
-	struct LOP_ASTNode old;
+	struct LOP_ASTNode *ret = last_token;
+	struct LOP_ASTNode *prev = NULL;
 
-	old = *last_token;
-	*last_token = *t;
-	*t = old;
+	assert(last_list);
+	assert(last_token);
 
-	t->parent = NULL;
+	for (struct LOP_ASTNode *i = last_list->list.head; i; i = i->next) {
+		if (i == last_token) {
+			break;
+		}
+		prev = i;
+	}
 
-	return t;
+	assert(prev == NULL || prev->next == last_token);
+
+	/* Taking into account that last_token is either
+	 * a single element in the list or the last element. */
+	if (prev == NULL) {
+		last_list->list.head = last_list->list.tail = t;
+	} else {
+		prev->next = t;
+		last_list->list.tail = t;
+	}
+
+	t->parent = last_list;
+	last_token = t;
+
+	ret->parent = NULL;
+	ret->next = NULL;
+
+	return ret;
 }
 
 static int vert_colon_closed(void)

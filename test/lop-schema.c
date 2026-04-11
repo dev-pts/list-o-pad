@@ -3,36 +3,32 @@
 #include <string.h>
 #include "FileMap.h"
 
-static int cb_dummy(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg)
+static int cb_dummy(struct LOP_Handler *h)
 {
-	static int level;
+	static int delta;
 
-	for (int i = 0; i < level; i++) {
-		printf("\t");
+	if (h->delta != -1) {
+		for (int i = 0; i < delta; i++) {
+			printf("\t");
+		}
 	}
 
-	if (n->type > LOP_TYPE_LIST_LAST) {
-		printf("%s %s\n", (char *)cb_arg, LOP_symbol_value(n));
-	} else {
-		printf("%s\n", (char *)cb_arg);
+	if (h->delta == 1) {
+		printf("%s\n", h->key);
+	} else if (h->delta == 0) {
+		if (h->n->type > LOP_TYPE_LIST_LAST) {
+			printf("%s %s\n", h->key, LOP_symbol_value(h->n));
+		}
 	}
-	level++;
-	LOP_cb_default(hl, n, param, NULL);
-	level--;
-	return 0;
-}
 
-static int resolve(struct LOP *lop, const char *key, struct LOP_CB *cb)
-{
-	cb->func = cb_dummy;
-	cb->arg = strdup(key);
+	delta += h->delta;
 	return 0;
 }
 
 int main(int argc, char *argv[])
 {
-	struct LOP lop = {
-		.resolve = resolve,
+	struct LOP_Schema schema = {
+		.filename = argv[1],
 	};
 	int rc;
 
@@ -41,10 +37,10 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
-	struct FileMap schema = map_file(argv[1]);
-	assert(schema.fd >= 0);
-	rc = LOP_schema_init(&lop, argv[1], schema.data, schema.len);
-	unmap_file(schema);
+	struct FileMap schema_str = map_file(argv[1]);
+	assert(schema_str.fd >= 0);
+	rc = LOP_schema_init(&schema, schema_str.data, schema_str.len);
+	unmap_file(schema_str);
 
 	if (rc < 0) {
 		fprintf(stderr, "User schema parsing error\n");
@@ -52,10 +48,27 @@ int main(int argc, char *argv[])
 	}
 
 	for (int i = 3; i < argc; i++) {
+		struct LOP lop = {
+			.schema = &schema,
+			.top_rule_name = argv[2],
+			.filename = argv[i],
+		};
 		struct FileMap source = map_file(argv[i]);
+
 		assert(source.fd >= 0);
-		rc = LOP_schema_parse_source(NULL, &lop, argv[i], source.data, source.len, argv[2]);
+
+		rc = LOP_init(&lop, source.data, source.len);
 		unmap_file(source);
+
+		struct LOP_HandlerList *hl = &lop.hl;
+
+		for (int i = 0; i < hl->count; i++) {
+			struct LOP_Handler *h = &hl->handler[i];
+
+			cb_dummy(h);
+		}
+
+		LOP_deinit(&lop);
 
 		if (rc < 0) {
 			fprintf(stderr, "Parsing error\n");
@@ -64,6 +77,6 @@ int main(int argc, char *argv[])
 	}
 
 out:
-	LOP_schema_deinit(&lop);
+	LOP_schema_deinit(&schema);
 	return 0;
 }

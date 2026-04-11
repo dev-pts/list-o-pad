@@ -5,8 +5,8 @@ CFLAGS := -Wall -O2 -Iinclude/ -fPIC
 
 all: liblop.so liblop.a test/lop-schema test/lop-ast
 
-src/ASTSchema.o: src/ASTSchema.c src/RootSchema.c src/ErrorReport.c src/KV.c
-src/TextToAST.o: src/TextToAST.c src/lex.yy.c src/ErrorReport.c
+src/ASTSchema.o: src/ASTSchema.c src/RootSchema.c src/ErrorReport.c src/KV.c include/LOP.h
+src/TextToAST.o: src/TextToAST.c src/lex.yy.c src/ErrorReport.c include/LOP.h
 src/lex.yy.c: src/lop.l
 	flex -o $@ $^
 
@@ -16,9 +16,11 @@ liblop.so: $(OBJS)
 liblop.a: $(OBJS)
 	ar rcs $@ $^
 
+test/lop-schema.o: liblop.a
 test/lop-schema: test/lop-schema.o liblop.a
 	$(LINK.c) $^ liblop.a -o $@
 
+test/lop-ast.o: liblop.a
 test/lop-ast: test/lop-ast.o liblop.a
 	$(LINK.c) $^ liblop.a -o $@
 
@@ -30,3 +32,5 @@ clean:
 	rm -f liblop.*
 	rm -f test/lop-schema
 	rm -f test/lop-ast
+
+	$(foreach dir, $(wildcard examples/*), make -C $(dir) clean;)

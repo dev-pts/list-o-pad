@@ -36,7 +36,7 @@ static int kv_add(struct KV *kv, const char *key, void *value)
 
 	for (int i = 0; i < kv->count; i++) {
 		if (!strcmp(kv->children[i].key, key)) {
-			assert(kv->children[i].value == NULL);
+			assert(kv->children[i].value == NULL || kv->children[i].value == value);
 			assert(value);
 			kv->children[i].value = value;
 			return kv->count;
@@ -53,6 +53,17 @@ static int kv_add(struct KV *kv, const char *key, void *value)
 	kv->children[kv->count - 1] = (struct KVEntry) { nkey, value };
 
 	return kv->count;
+}
+
+static void *kv_get(struct KV *kv, const char *key)
+{
+	for (int i = 0; i < kv->count; i++) {
+		if (!strcmp(kv->children[i].key, key)) {
+			return kv->children[i].value;
+		}
+	}
+
+	return NULL;
 }
 
 static int kv_get_index(struct KV *kv, const char *key, bool alloc)

@@ -28,8 +28,12 @@ struct LOP_ASTNode *LOP_list_tail(struct LOP_ASTNode *n)
 
 void LOP_delAST(struct LOP_ASTNode *root)
 {
+	if (!root) {
+		return;
+	}
+
 	if (root->type < LOP_TYPE_LIST_LAST) {
-		for (struct LOP_ASTNode *n = LOP_list_head(root); n;) {
+		for (struct LOP_ASTNode *n = LOP_list_head(root); n; ) {
 			struct LOP_ASTNode *nn = n->next;
 			LOP_delAST(n);
 			n = nn;

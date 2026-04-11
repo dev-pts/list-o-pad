@@ -6,15 +6,13 @@
 
 top:
 	tlist:
-		oneof:
-			tree: $html
-			call: $html
-
-html:
-	seqof: @html
-		identifier: 'html'
-		$attributes: #optional
-		$children: #optional
+		tree: @html
+			oneof:
+				identifier: 'html'
+				call:
+					identifier: 'html'
+					$attributes: #optional
+			$children: #optional
 
 attributes:
 	listof: @attr_separator
@@ -26,16 +24,22 @@ attributes:
 
 children:
 	listof:
-		oneof:
-			tree: $node
-			call: $node
+		$node
 		string: @iprintln
 
 node:
-	seqof: @node
+	oneof: @node
 		$name
-		$attributes: #optional
-		$children: #optional
+		call:
+			$name
+			$attributes: #optional
+		tree:
+			oneof:
+				$name
+				call:
+					$name
+					$attributes: #optional
+			$children: #optional
 
 name:
 	oneof:
