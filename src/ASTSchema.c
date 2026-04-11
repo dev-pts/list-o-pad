@@ -18,9 +18,11 @@ struct SchemaNode {
 	} sn_type;
 
 	bool optional;
-	bool last;
 
-	struct LOP_CB cb;
+	const char *key;
+
+	struct SchemaNode *parent;
+	struct SchemaNode *next;
 
 	struct SchemaNode **child;
 	int child_count;
@@ -59,6 +61,9 @@ static void dump_sn(struct SchemaNode *sn, int level, struct KV *kv)
 		printf(", $%s", kv->children[sn->ref].key);
 	}
 	if (sn->sn_type == SN_TYPE_AST) {
+		if (sn->type < LOP_TYPE_LIST_LAST_CALLABLE && sn->list.call) {
+			printf(", call");
+		}
 #define CASE_TYPE(type, val) case type: printf(", " val); break
 		switch (sn->type) {
 		CASE_TYPE(LOP_TYPE_LIST_COLON, "tlist");
@@ -84,9 +89,6 @@ static void dump_sn(struct SchemaNode *sn, int level, struct KV *kv)
 	if (sn->optional) {
 		printf(", #optional");
 	}
-	if (sn->last) {
-		printf(", #last");
-	}
 	printf("\n");
 }
 
@@ -105,9 +107,6 @@ static int s_report(enum LOP_ErrorType type, const char *str)
 	case LOP_ERROR_SCHEMA_MISSING_RULE:
 		fprintf(stderr, "Rule '%s' not found\n", str);
 		break;
-	case LOP_ERROR_SCHEMA_MISSING_HANDLER:
-		fprintf(stderr, "Handler '%s' not found\n", str);
-		break;
 	case LOP_ERROR_SCHEMA_MISSING_TOP:
 		fprintf(stderr, "Top rule '%s' not found\n", str);
 		break;
@@ -118,239 +117,310 @@ static int s_report(enum LOP_ErrorType type, const char *str)
 	return type;
 }
 
-int LOP_handler_eval(struct LOP_HandlerList hl, unsigned child, void *param)
+static void handler_resize(struct LOP_HandlerList *hl, int count)
 {
-	struct LOP_Handler h = hl.handler[child];
-
-	return h.sn->cb.func(h.hl, h.n, param, h.sn->cb.arg);
-}
-
-bool LOP_handler_evalable(struct LOP_HandlerList hl, unsigned child)
-{
-	return child < hl.count && hl.handler[child].sn;
-}
-
-static struct LOP_HandlerList *handler_child(struct LOP_HandlerList *parent, int i)
-{
-	return &parent->handler[i].hl;
-}
-
-static struct LOP_HandlerList *handler_tail(struct LOP_HandlerList *parent)
-{
-	return handler_child(parent, parent->count - 1);
-}
-
-static void handler_free(struct LOP_HandlerList *hl)
-{
-	for (int i = 0; i < hl->count; i++) {
-		handler_free(handler_child(hl, i));
-	}
-	free(hl->handler);
-}
-
-static void handler_resize(struct LOP_HandlerList *c, int count)
-{
-	for (int i = count; i < c->count; i++) {
-		handler_free(handler_child(c, i));
-	}
-	c->count = count;
-	c->handler = realloc(c->handler, c->count * sizeof(*c->handler));
-	if (c->count) {
-		assert(c->handler);
+	hl->count = count;
+	hl->handler = realloc(hl->handler, hl->count * sizeof(*hl->handler));
+	if (hl->count) {
+		assert(hl->handler);
 	}
 }
 
-static void handler_add(struct LOP_HandlerList *c, struct SchemaNode *sn, struct LOP_ASTNode *n)
+static void handler_add(struct LOP_HandlerList *hl, struct SchemaNode *sn, struct LOP_ASTNode *n, int delta)
 {
-	handler_resize(c, c->count + 1);
-
-	c->handler[c->count - 1] = (struct LOP_Handler) { sn, n };
-}
-
-static bool check_entry(struct LOP_HandlerList *hl, struct LOP_ASTNode **n, struct SchemaNode *c, struct LOP_ASTNode **err, struct KV *kv);
-
-static bool check_oneof(struct LOP_HandlerList *hl, struct LOP_ASTNode **n, struct SchemaNode *c, struct LOP_ASTNode **err, struct KV *kv)
-{
-	/* Find the first SchemaNode which consumes the ASTNode */
-	for (int i = 0; i < c->child_count; i++) {
-		if (check_entry(hl, n, c->child[i], err, kv)) {
-			return true;
-		}
+	if (!sn->key) {
+		return;
 	}
-	return false;
+
+	handler_resize(hl, hl->count + 1);
+
+	hl->handler[hl->count - 1] = (struct LOP_Handler) { sn->key, n, delta };
 }
 
-static bool check_listof(struct LOP_HandlerList *hl, struct LOP_ASTNode **n, struct SchemaNode *c, struct LOP_ASTNode **err, struct KV *kv)
-{
-	bool found = false;
+struct Context {
+	struct LOP_ASTNode **err;
+	struct KV *kv;
+	struct LOP_HandlerList *hl;
+};
 
-	/* Consume as much ASTNodes as possible */
-	while (check_oneof(hl, n, c, err, kv)) {
-		found = true;
+/* Because we have refs which have parent NULL,
+ * but when they in tree, they do have parent.
+ * That's why we need to construct this list in runtime. */
+struct CEContext {
+	struct SchemaNode *sn;
+	struct CEContext *parent;
+};
+
+static bool check_optional(struct Context *ctx, struct SchemaNode *sn)
+{
+	if (sn->optional) {
+		return true;
 	}
-	return found;
+
+	switch (sn->sn_type) {
+	case SN_TYPE_ONEOF:
+	case SN_TYPE_LISTOF:
+	case SN_TYPE_SEQOF:
+		return false;
+	case SN_TYPE_REF:
+		return check_optional(ctx, ctx->kv->children[sn->ref].value);
+	case SN_TYPE_AST:
+		return false;
+	default:
+		assert(0);
+	}
 }
 
-static bool check_seqof(struct LOP_HandlerList *hl, struct LOP_ASTNode **n, struct SchemaNode *c, struct LOP_ASTNode **err, struct KV *kv)
+static bool sn_ast_up(struct Context *ctx, struct CEContext *cec, struct LOP_ASTNode *ast)
 {
-	int i = 0;
+	struct CEContext *save = cec;
+	struct CEContext *cecp = cec->parent;
 
-	for (; i < c->child_count; i++) {
-		struct SchemaNode *ci = c->child[i];
+	while (cecp) {
+		handler_add(ctx->hl, cecp->sn, NULL, -1);
 
-		if (check_entry(hl, n, ci, err, kv)) {
-			/* If all ASTNodes are consumed, then ... */
-			if (!*n) {
-				i++;
-				break;
+		switch (cecp->sn->sn_type) {
+		case SN_TYPE_ONEOF:
+		case SN_TYPE_LISTOF:
+		case SN_TYPE_REF:
+			break;
+		case SN_TYPE_SEQOF:
+		case SN_TYPE_AST:
+			for (struct SchemaNode *sn = cec->sn->next; sn; sn = sn->next) {
+				if (!check_optional(ctx, sn)) {
+					return false;
+				}
 			}
-		} else if (ci->optional) {
-			/* We must not make holes in the handler list,
-			 * so that the user can properly trigger its callbacks
-			 * according to the schema node placement.
-			 * Storing the handler number is just meh,
-			 * because lookup and call will have for-loop which is meh */
-			handler_add(hl, NULL, NULL);
-		} else {
-			return false;
+			break;
 		}
+
+		if (cecp->sn->sn_type == SN_TYPE_AST) {
+			break;
+		}
+		cec = cecp;
+		cecp = cecp->parent;
 	}
 
-	/* ... the rest of the SchemaNodes must be optional */
-	if (!*n) {
-		for (; i < c->child_count; i++) {
-			struct SchemaNode *ci = c->child[i];
-
-			if (!ci->optional) {
-				return false;
-			}
-		}
+	if (!cecp) {
+		save->sn = NULL;
+		save->parent = NULL;
+		return true;
 	}
 
+	*save = *cecp;
 	return true;
 }
 
-static bool check_entry(struct LOP_HandlerList *hl, struct LOP_ASTNode **n, struct SchemaNode *c, struct LOP_ASTNode **err, struct KV *kv)
+static bool check_entry(struct Context *ctx, struct LOP_ASTNode *ast, struct CEContext *cec)
 {
-	struct LOP_ASTNode *n_orig = *n;
-	struct LOP_ASTNode *nn = *n;
+	struct CEContext cec_next = {
+		.parent = cec,
+	};
+	struct SchemaNode *sn = cec->sn;
+	struct LOP_HandlerList *hl = ctx->hl;
 	int hl_count = hl->count;
 
-	if (!nn) {
-		return false;
+	if (0) {
+		dump_sn_recurse(sn, 0, ctx->kv);
+		LOP_dump_ast(ast);
 	}
 
-	/* If user provided the cb, then the cb will be called,
-	 * if not, either NULL or default cb will be called.
-	 * The latter one will just iterate over its children
-	 * and call them one after another */
-	handler_add(hl, c, nn);
-
-	switch (c->sn_type) {
+	switch (sn->sn_type) {
 	case SN_TYPE_ONEOF:
-		if (!check_oneof(handler_tail(hl), n, c, err, kv)) {
-			goto mismatch;
-		}
-		break;
 	case SN_TYPE_LISTOF:
-		if (!check_listof(handler_tail(hl), n, c, err, kv)) {
-			goto mismatch;
+		handler_add(hl, sn, NULL, 1);
+
+		for (int i = 0; i < sn->child_count; i++) {
+			cec_next.sn = sn->child[i];
+
+			if (check_entry(ctx, ast, &cec_next)) {
+				return true;
+			}
 		}
-		break;
+		goto mismatch;
 	case SN_TYPE_SEQOF:
-		if (!check_seqof(handler_tail(hl), n, c, err, kv)) {
-			goto mismatch;
+		handler_add(hl, sn, NULL, 1);
+
+		for (int i = 0; i < sn->child_count; i++) {
+			cec_next.sn = sn->child[i];
+
+			if (check_entry(ctx, ast, &cec_next)) {
+				return true;
+			}
+
+			if (!check_optional(ctx, sn->child[i])) {
+				goto mismatch;
+			}
 		}
-		break;
+		goto mismatch;
 	case SN_TYPE_REF:
-		if (!check_entry(handler_tail(hl), n, kv->children[c->ref].value, err, kv)) {
-			goto mismatch;
+		handler_add(hl, sn, NULL, 1);
+
+		cec_next.sn = ctx->kv->children[sn->ref].value;
+
+		if (check_entry(ctx, ast, &cec_next)) {
+			return true;
 		}
-		break;
+		goto mismatch;
 	case SN_TYPE_AST:
-		/* Check SchemaNode and ASTNode for "equality" */
-		if (c->type != nn->type) {
+		if (!ast) {
 			goto mismatch;
 		}
 
-		if (c->type < LOP_TYPE_LIST_LAST) {
-			struct LOP_ASTNode *h = LOP_list_head(nn);
+		if (sn->type != ast->type) {
+			goto mismatch;
+		}
 
-			if (c->list.call != nn->list.call) {
+		if (sn->type < LOP_TYPE_LIST_LAST) {
+			if (sn->list.call != ast->list.call) {
 				goto mismatch;
 			}
-			if (!check_seqof(handler_tail(hl), &h, c, err, kv)) {
-				goto mismatch;
+
+			handler_add(hl, sn, ast, 1);
+
+			for (int i = 0; i < sn->child_count; i++) {
+				cec_next.sn = sn->child[i];
+
+				if (check_entry(ctx, LOP_list_head(ast), &cec_next)) {
+					return true;
+				}
+
+				if (!check_optional(ctx, sn->child[i])) {
+					goto mismatch;
+				}
 			}
-			/* SchemaNode's children does not consume ASTNode's children */
-			if (h) {
-				goto mismatch;
-			}
+
+			handler_add(ctx->hl, cec->sn, ast, -1);
 		} else {
-			if (c->symbol.value != NULL) {
-				if (strcmp(c->symbol.value, nn->symbol.value)) {
+			handler_add(hl, sn, ast, 0);
+
+			if (sn->symbol.value != NULL) {
+				if (strcmp(sn->symbol.value, ast->symbol.value)) {
 					goto mismatch;
 				}
 			}
 		}
 
-		/* Consume this ASTNode and move to the next */
-		*n = nn->next;
-		/* Update the err indicator */
-		if (*n) {
-			*err = *n;
-		}
 		break;
 	default:
 		assert(0);
 	}
 
-	/* If SchemaNode is marked as last, then no ASTNode must be left */
-	if (c->last && *n) {
+	struct LOP_ASTNode *next_ast = ast->next;
+	struct CEContext cec2 = *cec;
+
+	while (next_ast == NULL) {
+		if (!sn_ast_up(ctx, &cec2, ast)) {
+			goto mismatch;
+		}
+		ast = ast->parent;
+		if (!ast) {
+			assert(cec2.sn == NULL);
+			return true;
+		}
+		next_ast = ast->next;
+	}
+
+	cec = &cec2;
+
+	struct CEContext *save;
+
+	assert(next_ast);
+
+again:
+	save = cec;
+	cec = cec->parent;
+
+	while (cec && (cec->sn->sn_type == SN_TYPE_ONEOF || cec->sn->sn_type == SN_TYPE_REF)) {
+		handler_add(ctx->hl, cec->sn, NULL, -1);
+
+		save = cec;
+		cec = cec->parent;
+	}
+
+	if (!cec) {
+		/* We have next_ast, but no SNs left */
 		goto mismatch;
 	}
 
-	return true;
+	sn = cec->sn;
+	cec_next.parent = cec;
+
+	if (sn->sn_type == SN_TYPE_LISTOF) {
+		for (int i = 0; i < sn->child_count; i++) {
+			cec_next.sn = sn->child[i];
+
+			if (check_entry(ctx, next_ast, &cec_next)) {
+				return true;
+			}
+		}
+
+		handler_add(ctx->hl, cec->sn, NULL, -1);
+		goto again;
+	}
+
+	if (sn->sn_type == SN_TYPE_SEQOF) {
+		for (sn = save->sn->next; sn; sn = sn->next) {
+			cec_next.sn = sn;
+
+			if (check_entry(ctx, next_ast, &cec_next)) {
+				return true;
+			}
+
+			if (!check_optional(ctx, sn)) {
+				goto mismatch;
+			}
+		}
+
+		handler_add(ctx->hl, cec->sn, NULL, -1);
+		goto again;
+	}
+
+	if (sn->sn_type == SN_TYPE_AST) {
+		for (sn = save->sn->next; sn; sn = sn->next) {
+			cec_next.sn = sn;
+
+			if (check_entry(ctx, next_ast, &cec_next)) {
+				return true;
+			}
+
+			if (!check_optional(ctx, sn)) {
+				goto mismatch;
+			}
+		}
+		goto mismatch;
+	}
+
+	assert(sn->sn_type != SN_TYPE_REF);
 
 mismatch:
-	/* Rewind everything back, so that we can procceed the search with another SchemaNodes */
-	*n = n_orig;
 	handler_resize(hl, hl_count);
 	return false;
 }
 
-int LOP_cb_default(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg)
-{
-	for (int i = 0; i < hl.count; i++) {
-		if (LOP_handler_evalable(hl, i)) {
-			int rc = LOP_handler_eval(hl, i, param);
-			if (rc < 0) {
-				return rc;
-			}
-		}
-	}
-	return 0;
-}
-
 static int kv_dump_sn(void *arg, struct KVEntry *kv)
 {
-	struct SchemaNode *schema = kv->value;
+	struct SchemaNode *sn = kv->value;
 
 	printf("%s:\n", kv->key);
-	dump_sn_recurse(schema, 1, arg);
+	dump_sn_recurse(sn, 1, arg);
 	return 0;
 }
 
 #include "ErrorReport.c"
 
-int LOP_schema_parse_source(void *ctx, struct LOP *lop, const char *filename, const char *string, size_t len, const char *top_rule_name)
+int LOP_init(struct LOP *lop, const char *src, size_t len)
 {
-	struct KV *kv = lop->kv;
+	struct LOP_Schema *schema = lop->schema;
+	struct KV *kv = schema->kv;
 	struct LOP_ASTNode *ast;
-	struct SchemaNode *schema;
-	struct LOP_HandlerList hl = {};
-	struct LOP_ASTNode *n;
+	struct SchemaNode *sn;
 	struct LOP_ASTNode *err = NULL;
+	struct Context lop_ctx = {
+		.err = &err,
+		.kv = kv,
+		.hl = &lop->hl,
+	};
 	int kv_key;
 	int rc = 0;
 
@@ -360,35 +430,49 @@ int LOP_schema_parse_source(void *ctx, struct LOP *lop, const char *filename, co
 	}
 
 	/* Get the top rule from which everything starts */
-	kv_key = kv_get_index(kv, top_rule_name, false);
+	kv_key = kv_get_index(kv, lop->top_rule_name, false);
 	if (kv_key < 0) {
-		return s_report(LOP_ERROR_SCHEMA_MISSING_TOP, top_rule_name);
+		return s_report(LOP_ERROR_SCHEMA_MISSING_TOP, lop->top_rule_name);
 	}
-	schema = kv->children[kv_key].value;
+	sn = kv->children[kv_key].value;
 
 	/* Translate the source text to the AST */
-	rc = LOP_getAST(&ast, filename, string, len, &lop->operator_table);
+	rc = LOP_getAST(&ast, lop->filename, src, len, &schema->operator_table);
 	if (rc < 0) {
 		return rc;
 	}
-	n = ast;
 	err = ast;
 
-	/* Apply schema to the AST and get a tree of handlers to call */
-	if (check_entry(&hl, &n, schema, &err, kv)) {
-		assert(hl.count == 1);
-		/* Parsing succeeded, call the handlers to complete the job */
-		rc = LOP_handler_eval(hl, 0, ctx);
+	struct CEContext cec = {
+		.sn = sn,
+		.parent = NULL,
+	};
+
+	/* Apply sn to the AST and get a tree of handlers to call */
+	if (check_entry(&lop_ctx, ast, &cec)) {
+		assert(lop->hl.count);
+
+		lop->ast = ast;
 	} else {
-		report_error(filename, string, len, err->loc, "Syntax error");
-		return LOP_ERROR_SCHEMA_SYNTAX;
+		report_error(lop->filename, src, len, err->loc, "Syntax error");
+		rc = LOP_ERROR_SCHEMA_SYNTAX;
+
+		/* AST has allocs, we must free them */
+		LOP_delAST(ast);
 	}
 
-	handler_free(&hl);
-
-	/* AST has allocs, we must free them */
-	LOP_delAST(ast);
 	return rc;
+}
+
+void LOP_deinit(struct LOP *lop)
+{
+	LOP_delAST(lop->ast);
+
+	free(lop->hl.handler);
+
+	lop->ast = NULL;
+	lop->hl.count = 0;
+	lop->hl.handler = NULL;
 }
 
 #include "RootSchema.c"

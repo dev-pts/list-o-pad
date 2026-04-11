@@ -15,9 +15,12 @@ struct List {
 	int count;
 };
 
-static int cb_item(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg)
+static int cb_item(struct List *list, struct LOP_ASTNode *n, int delta)
 {
-	struct List *list = param;
+	if (delta < 0) {
+		return 0;
+	}
+
 	struct Item *item = calloc(1, sizeof(*item));
 
 	assert(item);
@@ -28,47 +31,48 @@ static int cb_item(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param
 
 	list->item[list->count - 1] = item;
 
-	return LOP_cb_default(hl, n, item, NULL);
+	return 0;
 }
 
-static int cb_id(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg)
+static int cb_id(struct List *list, struct LOP_ASTNode *n, int delta)
 {
-	struct Item *item = param;
+	struct Item *item = list->item[list->count - 1];
 
 	item->id = atoi(LOP_symbol_value(n));
 	return 0;
 }
 
-static int cb_value(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg)
+static int cb_value(struct List *list, struct LOP_ASTNode *n, int delta)
 {
-	struct Item *item = param;
+	struct Item *item = list->item[list->count - 1];
 
 	item->value = atoi(LOP_symbol_value(n));
 	return 0;
 }
 
-static int cb_selected(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg)
+static int cb_selected(struct List *list, struct LOP_ASTNode *n, int delta)
 {
-	struct Item *item = param;
+	struct Item *item = list->item[list->count - 1];
 
 	item->selected = true;
 	return 0;
 }
 
-static int cb_text(struct LOP_HandlerList hl, struct LOP_ASTNode *n, void *param, void *cb_arg)
+static int cb_text(struct List *list, struct LOP_ASTNode *n, int delta)
 {
-	struct Item *item = param;
+	struct Item *item = list->item[list->count - 1];
 
 	item->text = strdup(LOP_symbol_value(n));
 	assert(item->text);
 	return 0;
 }
 
-static int resolve(struct LOP *lop, const char *key, struct LOP_CB *cb)
+static int resolve(struct List *list, struct LOP_Handler *h)
 {
+	typedef int (*cb_t)(struct List *list, struct LOP_ASTNode *n, int delta);
 	static struct {
 		const char *key;
-		LOP_handler_t handler;
+		cb_t handler;
 	} entries[] = {
 		{ "item", cb_item },
 		{ "id", cb_id },
@@ -79,9 +83,8 @@ static int resolve(struct LOP *lop, const char *key, struct LOP_CB *cb)
 	};
 
 	for (int i = 0; entries[i].handler; i++) {
-		if (!strcmp(key, entries[i].key)) {
-			cb->func = entries[i].handler;
-			return 0;
+		if (!strcmp(h->key, entries[i].key)) {
+			return entries[i].handler(list, h->n, h->delta);
 		}
 	}
 	return -1;
@@ -89,20 +92,37 @@ static int resolve(struct LOP *lop, const char *key, struct LOP_CB *cb)
 
 int main(int argc, char *argv[])
 {
-	struct LOP lop = {
-		.resolve = resolve,
-		.error_cb = LOP_default_error_cb,
+	struct LOP_Schema schema = {
+		.filename = argv[1],
 	};
 	struct List list = {};
-	struct FileMap schema = map_file(argv[1]);
+	struct FileMap schema_str = map_file(argv[1]);
 	struct FileMap source = map_file(argv[2]);
 
-	if (!LOP_schema_init(&lop, schema.data)) {
-		LOP_schema_parse_source(&list, &lop, source.data, argv[3]);
-	}
-	LOP_schema_deinit(&lop);
+	if (!LOP_schema_init(&schema, schema_str.data, schema_str.len)) {
+		struct LOP lop = {
+			.schema = &schema,
+			.top_rule_name = argv[3],
+			.filename = argv[2],
+		};
 
-	unmap_file(schema);
+		LOP_init(&lop, source.data, source.len);
+
+		struct LOP_HandlerList *hl = &lop.hl;
+
+		for (int i = 0; i < hl->count; i++) {
+			struct LOP_Handler *h = &hl->handler[i];
+
+			if (resolve(&list, h)) {
+				break;
+			}
+		}
+
+		LOP_deinit(&lop);
+	}
+	LOP_schema_deinit(&schema);
+
+	unmap_file(schema_str);
 	unmap_file(source);
 
 	for (int i = 0; i < list.count; i++) {
