@@ -17,24 +17,25 @@ top:
 
 expr:
 	oneof:
-		oneof: @expr
-			tree: @define
-				identifier: 'define'
+		tree: @define
+			identifier: 'define'
+			seqof: @lambda
 				call:
 					identifier: @symbol
-					listof: @lambda
+					listof: @expr
 						identifier: @symbol
-				listof: @lambda_close
+				listof:
 					$expr
-			seqof:
-				tree: @if
-					identifier: 'if'
+		seqof: @if
+			tree:
+				identifier: 'if'
+				$expr
+				$expr
+			tree: #optional
+				identifier: 'else'
+				listof:
 					$expr
-					$expr
-				tree: #optional
-					identifier: 'else'
-					listof:
-						$expr
+		oneof: @expr
 			binary:
 				operator: @operator
 				$expr
@@ -48,7 +49,7 @@ expr:
 					$expr
 			list:
 				$expr: #optional
-		oneof: @symbol
-			identifier
-			number
+		oneof:
+			identifier: @symbol
+			number: @symbol
 		string: @string

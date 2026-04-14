@@ -128,6 +128,7 @@ static void handler_resize(struct LOP_HandlerList *hl, int count)
 
 static void handler_add(struct LOP_HandlerList *hl, struct SchemaNode *sn, struct LOP_ASTNode *n, int delta)
 {
+	/* FIXME remove? */
 	if (!sn->key) {
 		return;
 	}
@@ -276,13 +277,15 @@ static bool check_entry(struct Context *ctx, struct LOP_ASTNode *ast, struct CEC
 				goto mismatch;
 			}
 
-			handler_add(hl, sn, ast, 1);
+			handler_add(hl, sn, NULL, 1);
 
 			for (int i = 0; i < sn->child_count; i++) {
 				cec_next.sn = sn->child[i];
 
-				if (check_entry(ctx, LOP_list_head(ast), &cec_next)) {
-					return true;
+				if (LOP_list_head(ast)) {
+					if (check_entry(ctx, LOP_list_head(ast), &cec_next)) {
+						return true;
+					}
 				}
 
 				if (!check_optional(ctx, sn->child[i])) {
@@ -290,7 +293,11 @@ static bool check_entry(struct Context *ctx, struct LOP_ASTNode *ast, struct CEC
 				}
 			}
 
-			handler_add(ctx->hl, cec->sn, ast, -1);
+			if (LOP_list_head(ast)) {
+				goto mismatch;
+			}
+
+			handler_add(hl, sn, NULL, -1);
 		} else {
 			handler_add(hl, sn, ast, 0);
 

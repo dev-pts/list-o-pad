@@ -931,10 +931,7 @@ static void call_handlers(struct Runtime *r, struct LOP *lop)
 		if (h->delta == -1) {
 			delta--;
 		}
-		for (int j = 0; j < delta; j++) {
-			printf("\t");
-		}
-		printf("- %p, %s, %i\n", h->n, h->key, h->delta);
+		assert(delta >= 0);
 		if (h->delta == 1) {
 			delta++;
 		}
