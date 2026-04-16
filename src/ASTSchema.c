@@ -172,7 +172,7 @@ static bool check_optional(struct Context *ctx, struct SchemaNode *sn)
 	}
 }
 
-static bool sn_ast_up(struct Context *ctx, struct CEContext *cec, struct LOP_ASTNode *ast)
+static bool sn_ast_up(struct Context *ctx, struct CEContext *cec)
 {
 	struct CEContext *save = cec;
 	struct CEContext *cecp = cec->parent;
@@ -229,7 +229,7 @@ static bool check_entry(struct Context *ctx, struct LOP_ASTNode *ast, struct CEC
 	switch (sn->sn_type) {
 	case SN_TYPE_ONEOF:
 	case SN_TYPE_LISTOF:
-		handler_add(hl, sn, NULL, 1);
+		handler_add(hl, sn, ast, 1);
 
 		for (int i = 0; i < sn->child_count; i++) {
 			cec_next.sn = sn->child[i];
@@ -240,7 +240,7 @@ static bool check_entry(struct Context *ctx, struct LOP_ASTNode *ast, struct CEC
 		}
 		goto mismatch;
 	case SN_TYPE_SEQOF:
-		handler_add(hl, sn, NULL, 1);
+		handler_add(hl, sn, ast, 1);
 
 		for (int i = 0; i < sn->child_count; i++) {
 			cec_next.sn = sn->child[i];
@@ -255,7 +255,7 @@ static bool check_entry(struct Context *ctx, struct LOP_ASTNode *ast, struct CEC
 		}
 		goto mismatch;
 	case SN_TYPE_REF:
-		handler_add(hl, sn, NULL, 1);
+		handler_add(hl, sn, ast, 1);
 
 		cec_next.sn = ctx->kv->children[sn->ref].value;
 
@@ -277,7 +277,7 @@ static bool check_entry(struct Context *ctx, struct LOP_ASTNode *ast, struct CEC
 				goto mismatch;
 			}
 
-			handler_add(hl, sn, NULL, 1);
+			handler_add(hl, sn, ast, 1);
 
 			for (int i = 0; i < sn->child_count; i++) {
 				cec_next.sn = sn->child[i];
@@ -317,7 +317,7 @@ static bool check_entry(struct Context *ctx, struct LOP_ASTNode *ast, struct CEC
 	struct CEContext cec2 = *cec;
 
 	while (next_ast == NULL) {
-		if (!sn_ast_up(ctx, &cec2, ast)) {
+		if (!sn_ast_up(ctx, &cec2)) {
 			goto mismatch;
 		}
 		ast = ast->parent;

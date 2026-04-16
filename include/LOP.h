@@ -111,8 +111,6 @@ struct LOP {
 	struct LOP_HandlerList hl;
 };
 
-typedef int (*LOP_resolve_t)(struct LOP *lop, struct LOP_Handler *handler);
-
 enum LOP_ErrorType {
 	LOP_ERROR_LEXER_UNKNOWN = INT_MIN,
 	LOP_ERROR_LEXER_UNBALANCED,

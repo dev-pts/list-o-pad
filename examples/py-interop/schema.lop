@@ -31,57 +31,56 @@
 
 top:
 	tlist:
-		tree: @module
+		tree: @module_create
 			identifier: 'module'
-			identifier: @str
+			identifier: @module_set_name
 			tree:
 				identifier: 'port'
-				listof: @list
-					$port
-			listof: @listn
-				$statement
+				listof:
+					$port: @module_add_port
+			listof:
+				$statement: @module_add_stmt
 
 direction:
-	oneof: @dir
+	oneof:
 		identifier: 'in'
 		identifier: 'out'
 
 port:
-	oneof:
-		tree: @port
-			identifier: @str
-			oneof:
-				$direction
-				aref:
-					$direction
-					number: @dim
+	tree:
+		identifier: @port_set_name
+		oneof:
+			$direction: @port_set_dir
+			aref:
+				$direction: @port_set_dir
+				number: @port_set_width
 
 statement:
-	binary: @assign
-		operator: @str, '='
-		$lhs
-		$expr
+	binary: @assign_create
+		operator: '='
+		$lhs: @assign_set_lhs
+		$expr: @assign_set_rhs
 
 expr:
 	oneof:
-		identifier: @str
-		number: @str
+		identifier: @identifier
+		number: @number
 		unary: @unary
-			operator: @str
+			operator: @operator
 			$expr
 		binary: @binary
-			operator: @str
-			$expr
-			$expr
-		slist: @bus
-			listof: @list
-				$expr
-		list: @parens
+			operator: @binary_set_op
+			$expr: @binary_set_op1
+			$expr: @binary_set_op2
+		slist: @bus_create
+			listof:
+				$expr: @bus_add
+		list:
 			$expr
 
 lhs:
 	oneof:
-		identifier: @str
-		slist: @bus
-			listof: @list
-				$lhs
+		identifier: @identifier
+		slist: @bus_create
+			listof:
+				$lhs: @bus_add
