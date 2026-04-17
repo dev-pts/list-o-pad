@@ -54,7 +54,7 @@ class Statement:
         self._stmt = i
 
     def __str__(self):
-        return str(self._stmt) + ';\n'
+        return 'assign ' + str(self._stmt) + ';\n'
 
 class Assign:
     def __init__(self):
@@ -98,98 +98,217 @@ class Binary:
     def __str__(self):
         return str(self._op1) + ' ' + str(self._op) + ' ' + str(self._op2)
 
-class Context:
-    def __init__(self):
-        self._module = []
-        self._stack = []
+SYNTAX = []
+PARSER = []
 
-    def module_create(self, ast, delta):
+def parser(syntax):
+    def decorator(cls):
+        SYNTAX.append(syntax)
+        PARSER.append(cls)
+        return cls
+    return decorator
+
+@parser("""
+module:
+	tree: @module_create
+		identifier: 'module'
+		identifier: @module_set_name
+		tree:
+			identifier: 'port'
+			listof:
+				$port: @module_add_port
+		listof:
+			$statement: @module_add_stmt
+""")
+class ParseModule:
+    def module_create(stack, ast, delta):
         if delta > 0:
-            self._stack.append(Module())
-        else:
-            self._module.append(self._stack.pop())
+            stack.append(Module())
 
-    def module_set_name(self, ast, delta):
-        self._stack[-1].set_name(LOP.LOP_symbol_value(ast).decode())
+    def module_set_name(stack, ast, delta):
+        stack[-1].set_name(LOP.LOP_symbol_value(ast).decode())
 
-    def module_add_port(self, ast, delta):
+    def module_add_port(stack, ast, delta):
+        if delta < 0:
+            i = stack.pop()
+            stack[-1].add_port(i)
+
+    def module_add_stmt(stack, ast, delta):
+        if delta < 0:
+            i = stack.pop()
+            stack[-1].add_stmt(i)
+
+@parser("""
+port:
+	tree: @port_create
+		identifier: @port_set_name
+		oneof:
+			$direction: @port_set_dir
+			aref:
+				$direction: @port_set_dir
+				number: @port_set_width
+
+direction:
+	oneof:
+		identifier: 'in'
+		identifier: 'out'
+""")
+class ParsePort:
+    def port_create(stack, ast, delta):
         if delta > 0:
-            self._stack.append(Port())
-        else:
-            i = self._stack.pop()
-            self._stack[-1].add_port(i)
+            stack.append(Port())
 
-    def module_add_stmt(self, ast, delta):
-        if delta < 0:
-            i = Statement()
-            i.set_stmt(self._stack.pop())
-            self._stack[-1].add_stmt(i)
+    def port_set_name(stack, ast, delta):
+        stack[-1].set_name(LOP.LOP_symbol_value(ast).decode())
 
-    def port_set_name(self, ast, delta):
-        self._stack[-1].set_name(LOP.LOP_symbol_value(ast).decode())
-
-    def port_set_dir(self, ast, delta):
+    def port_set_dir(stack, ast, delta):
         if delta > 0:
-            self._stack[-1].set_dir(LOP.LOP_symbol_value(ast).decode())
+            stack[-1].set_dir(LOP.LOP_symbol_value(ast).decode())
 
-    def port_set_width(self, ast, delta):
-        self._stack[-1].set_width(int(LOP.LOP_symbol_value(ast).decode()))
+    def port_set_width(stack, ast, delta):
+        stack[-1].set_width(int(LOP.LOP_symbol_value(ast).decode()))
 
-    def assign_create(self, ast, delta):
+@parser("""
+statement:
+	oneof: @stmt_create
+		$stmt_assign: @stmt_set
+""")
+class ParseStatement:
+    def stmt_create(stack, ast, delta):
         if delta > 0:
-            self._stack.append(Assign())
+            stack.append(Statement())
 
-    def assign_set_lhs(self, ast, delta):
+    def stmt_set(stack, ast, delta):
         if delta < 0:
-            i = self._stack.pop()
-            self._stack[-1].set_lhs(i)
+            i = stack.pop()
+            stack[-1].set_stmt(i)
 
-    def assign_set_rhs(self, ast, delta):
-        if delta < 0:
-            i = self._stack.pop()
-            self._stack[-1].set_rhs(i)
+@parser("""
+stmt_assign:
+	binary: @assign_create
+		operator: '='
+		$lhs: @assign_set_lhs
+		$expr: @assign_set_rhs
 
-    def bus_create(self, ast, delta):
+lhs:
+	oneof:
+		identifier: @identifier
+		$bus
+""")
+class ParseAssign:
+    def assign_create(stack, ast, delta):
         if delta > 0:
-            self._stack.append(Bus())
+            stack.append(Assign())
 
-    def bus_add(self, ast, delta):
+    def assign_set_lhs(stack, ast, delta):
         if delta < 0:
-            i = self._stack.pop()
-            self._stack[-1].add(i)
+            i = stack.pop()
+            stack[-1].set_lhs(i)
 
-    def identifier(self, ast, delta):
-        self._stack.append(LOP.LOP_symbol_value(ast).decode())
+    def assign_set_rhs(stack, ast, delta):
+        if delta < 0:
+            i = stack.pop()
+            stack[-1].set_rhs(i)
 
-    def binary(self, ast, delta):
+@parser("""
+bus:
+	slist: @bus_create
+		listof:
+			$expr: @bus_add
+""")
+class ParseBus:
+    def bus_create(stack, ast, delta):
         if delta > 0:
-            self._stack.append(Binary())
+            stack.append(Bus())
 
-    def binary_set_op(self, ast, delta):
-        self._stack[-1].set_op(LOP.LOP_symbol_value(ast).decode())
-
-    def binary_set_op1(self, ast, delta):
+    def bus_add(stack, ast, delta):
         if delta < 0:
-            i = self._stack.pop()
-            self._stack[-1].set_op1(i)
+            i = stack.pop()
+            stack[-1].add(i)
 
-    def binary_set_op2(self, ast, delta):
+@parser("""
+expr:
+	oneof:
+		identifier: @identifier
+		number: @number
+		unary: @unary
+			operator: @operator
+			$expr
+		binary: @binary
+			operator: @binary_set_op
+			$expr: @binary_set_op1
+			$expr: @binary_set_op2
+		$bus
+		list:
+			$expr
+""")
+class ParserExpr:
+    def identifier(stack, ast, delta):
+        stack.append(LOP.LOP_symbol_value(ast).decode())
+
+    def binary(stack, ast, delta):
+        if delta > 0:
+            stack.append(Binary())
+
+    def binary_set_op(stack, ast, delta):
+        stack[-1].set_op(LOP.LOP_symbol_value(ast).decode())
+
+    def binary_set_op1(stack, ast, delta):
         if delta < 0:
-            i = self._stack.pop()
-            self._stack[-1].set_op2(i)
+            i = stack.pop()
+            stack[-1].set_op1(i)
 
-    def __str__(self):
-        ret = ''
-        for i in self._module:
-            ret += str(i)
-        return ret
+    def binary_set_op2(stack, ast, delta):
+        if delta < 0:
+            i = stack.pop()
+            stack[-1].set_op2(i)
+
+@parser("""
+top:
+	tlist:
+		listof:
+			$module
+""")
+class Top:
+    pass
+
+schema_str = """
+: #operators
+	{
+	}
+
+	unary:
+		'++', '--'
+		'!', '~'
+		'+', '-'
+		'*', '/'
+		'&', '|', '^'
+
+	binary_left_to_right: '*', '/', '%'
+	binary_left_to_right: '+', '-'
+	binary_left_to_right: '<<', '>>'
+	binary_left_to_right: '<', '>', '<=', '>='
+	binary_left_to_right: '==', '!='
+	binary_left_to_right: '&'
+	binary_left_to_right: '^'
+	binary_left_to_right: '|'
+	binary_left_to_right: '&&'
+	binary_left_to_right: '||'
+
+	binary_right_to_left:
+		'='
+		'+=', '-='
+		'*=', '/=', '%='
+		'>>=', '<<='
+		'~=', '&=', '|=', '^='
+"""
+
+schema_str += ''.join(SYNTAX)
 
 schema = LOP.LOP_Schema()
 schema.filename = LOP.String('schema.lop'.encode())
 
-schema_str = LOP.map_file('schema.lop')
-rc = LOP.LOP_schema_init(schema, schema_str.data, schema_str.len)
-LOP.unmap_file(schema_str)
+rc = LOP.LOP_schema_init(schema, schema_str, len(schema_str))
 
 if rc == 0:
     lop = LOP.LOP()
@@ -201,13 +320,17 @@ if rc == 0:
     LOP.LOP_init(lop, src.data, src.len)
     LOP.unmap_file(src)
 
-    ctx = Context()
+    stack = []
 
     for i in range(lop.hl.count):
-        func = getattr(ctx, str(lop.hl.handler[i].key))
-        func(lop.hl.handler[i].n, lop.hl.handler[i].delta)
+        for j in PARSER:
+            if hasattr(j, str(lop.hl.handler[i].key)):
+                func = getattr(j, str(lop.hl.handler[i].key))
+                func(stack, lop.hl.handler[i].n, lop.hl.handler[i].delta)
+                break
 
-    print(ctx)
+    for i in stack:
+        print(i)
 
     LOP.LOP_deinit(lop)
 
