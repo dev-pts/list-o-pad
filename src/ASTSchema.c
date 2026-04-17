@@ -139,7 +139,7 @@ static void handler_add(struct LOP_HandlerList *hl, struct SchemaNode *sn, struc
 }
 
 struct Context {
-	struct LOP_ASTNode **err;
+	struct LOP_ASTNode *err;
 	struct KV *kv;
 	struct LOP_HandlerList *hl;
 };
@@ -172,6 +172,7 @@ static bool check_optional(struct Context *ctx, struct SchemaNode *sn)
 	}
 }
 
+/* "Close" SNs, until it's AST */
 static bool sn_ast_up(struct Context *ctx, struct CEContext *cec)
 {
 	struct CEContext *save = cec;
@@ -212,14 +213,19 @@ static bool sn_ast_up(struct Context *ctx, struct CEContext *cec)
 	return true;
 }
 
+/* Traverses all the possibilities, until the first success.
+ * Uses recursion and native stack to track the state. */
 static bool check_entry(struct Context *ctx, struct LOP_ASTNode *ast, struct CEContext *cec)
 {
 	struct CEContext cec_next = {
 		.parent = cec,
 	};
+	struct LOP_ASTNode *err = ast;
 	struct SchemaNode *sn = cec->sn;
 	struct LOP_HandlerList *hl = ctx->hl;
 	int hl_count = hl->count;
+
+	ctx->err = NULL;
 
 	if (0) {
 		dump_sn_recurse(sn, 0, ctx->kv);
@@ -318,6 +324,7 @@ static bool check_entry(struct Context *ctx, struct LOP_ASTNode *ast, struct CEC
 
 	while (next_ast == NULL) {
 		if (!sn_ast_up(ctx, &cec2)) {
+			err = ast;
 			goto mismatch;
 		}
 		ast = ast->parent;
@@ -333,6 +340,8 @@ static bool check_entry(struct Context *ctx, struct LOP_ASTNode *ast, struct CEC
 	struct CEContext *save;
 
 	assert(next_ast);
+
+	err = next_ast;
 
 again:
 	save = cec;
@@ -402,6 +411,9 @@ again:
 
 mismatch:
 	handler_resize(hl, hl_count);
+	if (!ctx->err) {
+		ctx->err = err;
+	}
 	return false;
 }
 
@@ -422,9 +434,7 @@ int LOP_init(struct LOP *lop, const char *src, size_t len)
 	struct KV *kv = schema->kv;
 	struct LOP_ASTNode *ast;
 	struct SchemaNode *sn;
-	struct LOP_ASTNode *err = NULL;
 	struct Context lop_ctx = {
-		.err = &err,
 		.kv = kv,
 		.hl = &lop->hl,
 	};
@@ -448,7 +458,6 @@ int LOP_init(struct LOP *lop, const char *src, size_t len)
 	if (rc < 0) {
 		return rc;
 	}
-	err = ast;
 
 	struct CEContext cec = {
 		.sn = sn,
@@ -461,7 +470,7 @@ int LOP_init(struct LOP *lop, const char *src, size_t len)
 
 		lop->ast = ast;
 	} else {
-		report_error(lop->filename, src, len, err->loc, "Syntax error");
+		report_error(lop->filename, src, len, lop_ctx.err->loc, "Syntax error");
 		rc = LOP_ERROR_SCHEMA_SYNTAX;
 
 		/* AST has allocs, we must free them */
