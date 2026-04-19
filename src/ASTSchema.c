@@ -139,7 +139,6 @@ static void handler_add(struct LOP_HandlerList *hl, struct SchemaNode *sn, struc
 }
 
 struct Context {
-	struct LOP_ASTNode *err;
 	struct KV *kv;
 	struct LOP_HandlerList *hl;
 };
@@ -220,12 +219,13 @@ static bool check_entry(struct Context *ctx, struct LOP_ASTNode *ast, struct CEC
 	struct CEContext cec_next = {
 		.parent = cec,
 	};
-	struct LOP_ASTNode *err = ast;
 	struct SchemaNode *sn = cec->sn;
 	struct LOP_HandlerList *hl = ctx->hl;
 	int hl_count = hl->count;
 
-	ctx->err = NULL;
+	if (ast->parsed == 0) {
+		ast->parsed = 1;
+	}
 
 	if (0) {
 		dump_sn_recurse(sn, 0, ctx->kv);
@@ -319,15 +319,21 @@ static bool check_entry(struct Context *ctx, struct LOP_ASTNode *ast, struct CEC
 		assert(0);
 	}
 
+	assert(ast->parsed == 1);
+	ast->parsed = 2;
+
 	struct LOP_ASTNode *next_ast = ast->next;
 	struct CEContext cec2 = *cec;
 
 	while (next_ast == NULL) {
 		if (!sn_ast_up(ctx, &cec2)) {
-			err = ast;
 			goto mismatch;
 		}
 		ast = ast->parent;
+		if (ast) {
+			assert(ast->parsed == 1);
+			ast->parsed = 2;
+		}
 		if (!ast) {
 			assert(cec2.sn == NULL);
 			return true;
@@ -341,7 +347,14 @@ static bool check_entry(struct Context *ctx, struct LOP_ASTNode *ast, struct CEC
 
 	assert(next_ast);
 
-	err = next_ast;
+	if (next_ast->parsed == 0) {
+		next_ast->parsed = 1;
+	}
+
+	if (0) {
+		dump_sn_recurse(sn, 0, ctx->kv);
+		LOP_dump_ast(next_ast);
+	}
 
 again:
 	save = cec;
@@ -361,6 +374,11 @@ again:
 
 	sn = cec->sn;
 	cec_next.parent = cec;
+
+	if (0) {
+		dump_sn_recurse(sn, 0, ctx->kv);
+		LOP_dump_ast(next_ast);
+	}
 
 	if (sn->sn_type == SN_TYPE_LISTOF) {
 		for (int i = 0; i < sn->child_count; i++) {
@@ -411,9 +429,6 @@ again:
 
 mismatch:
 	handler_resize(hl, hl_count);
-	if (!ctx->err) {
-		ctx->err = err;
-	}
 	return false;
 }
 
@@ -427,6 +442,25 @@ static int kv_dump_sn(void *arg, struct KVEntry *kv)
 }
 
 #include "ErrorReport.c"
+
+static struct LOP_ASTNode *ast_find_err(struct LOP_ASTNode *t)
+{
+	if (t == NULL || t->parsed != 1) {
+		return NULL;
+	}
+
+	if (t->type < LOP_TYPE_LIST_LAST) {
+		for (struct LOP_ASTNode *i = LOP_list_head(t); i; i = i->next) {
+			struct LOP_ASTNode *ret = ast_find_err(i);
+
+			if (ret) {
+				return ret;
+			}
+		}
+	}
+
+	return t;
+}
 
 int LOP_init(struct LOP *lop, const char *src, size_t len)
 {
@@ -470,7 +504,17 @@ int LOP_init(struct LOP *lop, const char *src, size_t len)
 
 		lop->ast = ast;
 	} else {
-		report_error(lop->filename, src, len, lop_ctx.err->loc, "Syntax error");
+		struct LOP_ASTNode *err = ast_find_err(ast);
+
+		assert(err);
+
+		/* Get to the head, otherwise the error will point, for example,
+		 * to the :, instead of the first element, which is more convenient. */
+		while (err->type < LOP_TYPE_LIST_LAST) {
+			err = LOP_list_head(err);
+		}
+
+		report_error(lop->filename, src, len, err->loc, "Syntax error");
 		rc = LOP_ERROR_SCHEMA_SYNTAX;
 
 		/* AST has allocs, we must free them */

@@ -60,6 +60,7 @@ struct LOP_ASTNode {
 	};
 
 	struct LOP_Location loc;
+	int parsed;
 };
 
 struct LOP_Operator {
