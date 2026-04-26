@@ -227,6 +227,12 @@ static bool check_entry(struct Context *ctx, struct LOP_ASTNode *ast, struct CEC
 		ast->parsed = 1;
 	}
 
+	if (ast->sn == sn) {
+		return false;
+	}
+
+	ast->sn = sn;
+
 	if (0) {
 		dump_sn_recurse(sn, 0, ctx->kv);
 		LOP_dump_ast(ast);
@@ -319,7 +325,6 @@ static bool check_entry(struct Context *ctx, struct LOP_ASTNode *ast, struct CEC
 		assert(0);
 	}
 
-	assert(ast->parsed == 1);
 	ast->parsed = 2;
 
 	struct LOP_ASTNode *next_ast = ast->next;
@@ -331,7 +336,6 @@ static bool check_entry(struct Context *ctx, struct LOP_ASTNode *ast, struct CEC
 		}
 		ast = ast->parent;
 		if (ast) {
-			assert(ast->parsed == 1);
 			ast->parsed = 2;
 		}
 		if (!ast) {
