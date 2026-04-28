@@ -35,8 +35,8 @@ enum Token {
 %option yylineno
 %option caseless
 
-DIGIT [0-9][_0-9]*
-NUMBER [0-9a-f_]
+DIGITS [0-9][_0-9]*
+NUMBER [0-9a-f_]+
 ID [_a-z][_a-z0-9]*
 OPERATOR [.~!@#$%^&*+\-=<>/?|]
 BASE [bdxo]
@@ -66,15 +66,15 @@ WHITESPACE [ ]+
 
 %%
 
-{DIGIT}+ {
+{DIGITS} {
 	return L_DIGIT;
 }
 
-{DIGIT}+"."{DIGIT}* {
+{DIGITS}"."{DIGITS} {
 	return L_FLOAT;
 }
 
-{DIGIT}+{BASE}{NUMBER}+ {
+{DIGITS}{BASE}{NUMBER} {
 	return L_BNUMBER;
 }
 
