@@ -413,17 +413,25 @@ static int l_operator(struct LOP_OperatorTable *operator_table)
 
 static int l_push_token(enum LOP_ASTNodeType t)
 {
-	if (t < LOP_TYPE_LIST_LAST_CALLABLE && last_list->type > LOP_TYPE_LIST_LAST_CALLABLE) {
+	while (t < LOP_TYPE_LIST_LAST_CALLABLE && last_list->type > LOP_TYPE_LIST_LAST_CALLABLE) {
 		/* Priority 0 is needed to have these possibilites:
 		 * 1. $a() => (call '()' (unary (operator $) (identifier a)))
 		 * 2. -b() => (unary (call '()' (operator $) (identifier b)))
 		 * 3. a - b() => (binary (operator -) (identifier a) (call '()' (identifier b)))
 		 * 3. a->b() => (call '()' (binary (operator ->) (identifier a) (identifier b)))
 		 */
-		if (last_list->list.prio == 0) {
+		/* :; list is checked too because we want:
+		 * 1. a: b => (call ':;' (id a) (id b))
+		 * 2. a + b: c => (call ':;' (binary (op +) (id a) (id b)) (id c))
+		 * 3. a * b + c * d: e => (call ':;' (binary (op +) (* a b) (* c d)) (id e))
+		 */
+		if (last_list->list.prio == 0 || t == LOP_TYPE_LIST_COLON) {
 			last_list = last_list->parent;
 			last_token = last_list->list.tail;
+			continue;
 		}
+
+		break;
 	}
 
 	return push_token(create_token(t));
