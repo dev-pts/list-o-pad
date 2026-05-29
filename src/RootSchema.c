@@ -272,7 +272,7 @@ struct Runtime {
 	int prio;
 
 	const char *key;
-	struct SchemaNode *c;
+	struct SchemaNode *sn;
 
 	struct KV *kv;
 };
@@ -348,148 +348,156 @@ static int cb_sn_create(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 	if (delta == 1) {
 		struct SchemaNode *c = sn_create();
 
-		if (r->c) {
-			sn_append(r->c, c);
+		if (r->sn) {
+			sn_append(r->sn, c);
 		} else {
 			kv_add(r->schema->kv, r->key, c);
 		}
 
-		r->c = c;
+		r->sn = c;
 	} else if (delta == -1) {
-		r->c = r->c->parent;
+		r->sn = r->sn->parent;
 	}
 	return 0;
 }
 
 static int cb_sn_set_symbol(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	sn_set_symbol(r->c, LOP_symbol_value(n));
+	sn_set_symbol(r->sn, LOP_symbol_value(n));
 	return 0;
 }
 
 static int cb_sn_set_cb(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	r->c->key = strdup(LOP_symbol_value(n));
+	const char *k = LOP_symbol_value(n);
+
+	if (r->sn->key) {
+		r->sn->key = realloc((char *)r->sn->key, strlen(r->sn->key) + strlen(k) + 1 + 1);
+		strcat((char *)r->sn->key, "\t");
+		strcat((char *)r->sn->key, k);
+	} else {
+		r->sn->key = strdup(k);
+	}
 	return 0;
 }
 
 static int cb_sn_set_optional(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	sn_set_optional(r->c);
+	sn_set_optional(r->sn);
 	return 0;
 }
 
 static int cb_sn_set_oneof(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	sn_set_oneof(r->c);
+	sn_set_oneof(r->sn);
 	return 0;
 }
 
 static int cb_sn_set_listof(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	sn_set_listof(r->c);
+	sn_set_listof(r->sn);
 	return 0;
 }
 
 static int cb_sn_set_seqof(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	sn_set_seqof(r->c);
+	sn_set_seqof(r->sn);
 	return 0;
 }
 
 static int cb_sn_set_ref(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	sn_set_ref(r->c, LOP_symbol_value(n), r->schema->kv);
+	sn_set_ref(r->sn, LOP_symbol_value(n), r->schema->kv);
 	return 0;
 }
 
 static int cb_sn_set_identifier(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	sn_set_symbol_type(r->c, LOP_TYPE_ID);
+	sn_set_symbol_type(r->sn, LOP_TYPE_ID);
 	return 0;
 }
 
 static int cb_sn_set_number(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	sn_set_symbol_type(r->c, LOP_TYPE_NUMBER);
+	sn_set_symbol_type(r->sn, LOP_TYPE_NUMBER);
 	return 0;
 }
 
 static int cb_sn_set_string(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	sn_set_symbol_type(r->c, LOP_TYPE_STRING);
+	sn_set_symbol_type(r->sn, LOP_TYPE_STRING);
 	return 0;
 }
 
 static int cb_sn_set_operator(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	sn_set_symbol_type(r->c, LOP_TYPE_OPERATOR);
+	sn_set_symbol_type(r->sn, LOP_TYPE_OPERATOR);
 	return 0;
 }
 
 static int cb_sn_set_tree(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	sn_set_tree(r->c);
+	sn_set_tree(r->sn);
 	return 0;
 }
 
 static int cb_sn_set_call(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	sn_set_call(r->c);
+	sn_set_call(r->sn);
 	return 0;
 }
 
 static int cb_sn_set_aref(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	sn_set_aref(r->c);
+	sn_set_aref(r->sn);
 	return 0;
 }
 
 static int cb_sn_set_struct(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	sn_set_struct(r->c);
+	sn_set_struct(r->sn);
 	return 0;
 }
 
 static int cb_sn_set_fstring(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	sn_set_fstring(r->c);
+	sn_set_fstring(r->sn);
 	return 0;
 }
 
 static int cb_sn_set_list(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	sn_set_list(r->c);
+	sn_set_list(r->sn);
 	return 0;
 }
 
 static int cb_sn_set_tlist(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	sn_set_tlist(r->c);
+	sn_set_tlist(r->sn);
 	return 0;
 }
 
 static int cb_sn_set_alist(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	sn_set_alist(r->c);
+	sn_set_alist(r->sn);
 	return 0;
 }
 
 static int cb_sn_set_slist(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	sn_set_slist(r->c);
+	sn_set_slist(r->sn);
 	return 0;
 }
 
 static int cb_sn_set_binary(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	sn_set_binary(r->c);
+	sn_set_binary(r->sn);
 	return 0;
 }
 
 static int cb_sn_set_unary(struct Runtime *r, struct LOP_ASTNode *n, int delta)
 {
-	sn_set_unary(r->c);
+	sn_set_unary(r->sn);
 	return 0;
 }
 
@@ -517,7 +525,7 @@ static struct LOP_Schema root_schema_init(struct Runtime *r)
 		);
 	);
 	KV_ADD("optable",
-		SN_TLIST(
+		SN_TREE(
 			SN_UNARY(
 				SN_OPERATOR(
 					sn_set_symbol(c, "#");
@@ -594,39 +602,14 @@ static struct LOP_Schema root_schema_init(struct Runtime *r)
 		);
 	);
 	KV_ADD("handler",
-		SN_UNARY(
-			SN_OPERATOR(
-				sn_set_symbol(c, "@");
-			);
-			SN_IDENTIFIER(
-				SN_CB(cb_sn_set_cb);
-			);
-		);
-	);
-	KV_ADD("option",
-		SN_SEQOF(
+		SN_LISTOF(
 			SN_UNARY(
-				sn_set_optional(c);
-				SN_CB(cb_sn_set_optional);
 				SN_OPERATOR(
-					sn_set_symbol(c, "#");
+					sn_set_symbol(c, "@");
 				);
 				SN_IDENTIFIER(
-					sn_set_symbol(c, "optional");
+					SN_CB(cb_sn_set_cb);
 				);
-			);
-			SN_REF("handler",
-				sn_set_optional(c);
-			);
-		);
-	);
-	KV_ADD("ref_one",
-		SN_UNARY(
-			SN_OPERATOR(
-				sn_set_symbol(c, "$");
-			);
-			SN_IDENTIFIER(
-				SN_CB(cb_sn_set_ref);
 			);
 		);
 	);
@@ -687,12 +670,12 @@ static struct LOP_Schema root_schema_init(struct Runtime *r)
 					SN_IDENTIFIER(
 						sn_set_symbol(c, "identifier");
 					);
-					SN_REF("option",
-						sn_set_optional(c);
-					);
 					SN_STRING(
 						sn_set_optional(c);
 						SN_CB(cb_sn_set_symbol);
+					);
+					SN_REF("option",
+						sn_set_optional(c);
 					);
 				);
 			);
@@ -705,12 +688,12 @@ static struct LOP_Schema root_schema_init(struct Runtime *r)
 					SN_IDENTIFIER(
 						sn_set_symbol(c, "number");
 					);
-					SN_REF("option",
-						sn_set_optional(c);
-					);
 					SN_STRING(
 						sn_set_optional(c);
 						SN_CB(cb_sn_set_symbol);
+					);
+					SN_REF("option",
+						sn_set_optional(c);
 					);
 				);
 			);
@@ -723,12 +706,12 @@ static struct LOP_Schema root_schema_init(struct Runtime *r)
 					SN_IDENTIFIER(
 						sn_set_symbol(c, "string");
 					);
-					SN_REF("option",
-						sn_set_optional(c);
-					);
 					SN_STRING(
 						sn_set_optional(c);
 						SN_CB(cb_sn_set_symbol);
+					);
+					SN_REF("option",
+						sn_set_optional(c);
 					);
 				);
 			);
@@ -741,12 +724,12 @@ static struct LOP_Schema root_schema_init(struct Runtime *r)
 					SN_IDENTIFIER(
 						sn_set_symbol(c, "operator");
 					);
-					SN_REF("option",
-						sn_set_optional(c);
-					);
 					SN_STRING(
 						sn_set_optional(c);
 						SN_CB(cb_sn_set_symbol);
+					);
+					SN_REF("option",
+						sn_set_optional(c);
 					);
 				);
 			);
@@ -903,6 +886,33 @@ static struct LOP_Schema root_schema_init(struct Runtime *r)
 				);
 				SN_REF("snode");
 				SN_REF("snode");
+			);
+		);
+	);
+	KV_ADD("option",
+		SN_SEQOF(
+			SN_REF("handler",
+				sn_set_optional(c);
+			);
+			SN_UNARY(
+				sn_set_optional(c);
+				SN_CB(cb_sn_set_optional);
+				SN_OPERATOR(
+					sn_set_symbol(c, "#");
+				);
+				SN_IDENTIFIER(
+					sn_set_symbol(c, "optional");
+				);
+			);
+		);
+	);
+	KV_ADD("ref_one",
+		SN_UNARY(
+			SN_OPERATOR(
+				sn_set_symbol(c, "$");
+			);
+			SN_IDENTIFIER(
+				SN_CB(cb_sn_set_ref);
 			);
 		);
 	);
