@@ -1,0 +1,21 @@
+test: module:
+		B = A * 8
+		A = 2
+	local:
+		b[2]: SubModule
+		k[3]: net[2]
+
+	if: A == 3
+		$bind(b[0].p, k[0][1])
+	$bind(b[0].x, 1d1)
+
+	b[0].z = B
+
+SubModule: module
+	port:
+		p: inout
+		x: in
+		z: in[2]
+		y: out[3]
+
+	y = 1

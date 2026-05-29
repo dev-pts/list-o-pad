@@ -1,0 +1,35 @@
+test: module:
+		B = A * 8
+		A = 2
+	port:
+		a: inout
+	local:
+		b: SubModule
+		c: net
+		d: $FSM
+			A
+			B
+			C
+		f[2]: $FSM
+			A
+			B
+			C
+
+	$bind(b.p, a)
+	$bind(b.x, 1d1)
+
+	$goto(d.C)
+	$goto(f[0].B)
+
+	b.z = B
+	c = d.C
+	c = f[0].C
+
+SubModule: module
+	port:
+		p: inout
+		x: in
+		z: in
+		y: out
+
+	y = 1

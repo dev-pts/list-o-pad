@@ -1,0 +1,20 @@
+test: module:
+		A = 1
+	port:
+		a: in
+		b: out
+		c: inout
+	local:
+		d: net
+
+	b = 1
+
+	if: d == 2
+		b = 2
+	elif: A == 2
+		b = 3
+	else:
+		b = 4
+
+	ff: +a
+		d = 1

@@ -1,0 +1,15 @@
+test: module:
+		B = A * 8
+		A = 2
+	local:
+		b: SubModule
+		k: net[2]
+
+SubModule: module
+	port:
+		p: inout
+		x: in
+		z: in[2]
+		y: out[3]
+
+	y = 1

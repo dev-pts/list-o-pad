@@ -1,0 +1,6 @@
+test: module
+	port:
+		a: in
+		b[2]: in
+		c: in[3]
+		d[2]: in[3]

@@ -1,0 +1,10 @@
+test: module
+	local:
+		a: SubModule
+		b: SubModule(Z = 2)
+		c: SubModule
+
+SubModule: module:
+		Z = 3
+	port:
+		y: out[Z]

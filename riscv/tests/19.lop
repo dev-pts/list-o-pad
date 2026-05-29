@@ -1,0 +1,13 @@
+test: module
+	local:
+		a: SubModule
+		b: SubModule(Z = 2)
+		c: SubModule
+
+	$bind(c.z, 1x0)
+
+SubModule: module:
+		Z = 3
+	port:
+		y: out[Z]
+		z: in

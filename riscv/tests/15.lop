@@ -1,0 +1,16 @@
+test: module:
+		B = A * 8
+		A = 2
+	local:
+		b[2]: SubModule(Z = B2 + 1, B2 = 5)
+
+SubModule: module:
+		Z = 3
+		B2 = 1
+	port:
+		p: inout
+		x: in
+		z: in[B2]
+		y: out[Z]
+
+	y = 1
