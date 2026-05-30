@@ -199,6 +199,138 @@ class External:
 		return None
 
 @for_all_methods(wrap)
+class InterfacePortDesc:
+	def __init__(self, ast):
+		self.ast = ast
+		self._class = []
+		self.width = None
+
+	def add_class(self, arg):
+		if arg in self._class:
+			raise Exception()
+		self._class.append(arg)
+
+	def set_width(self, arg):
+		self.width = arg
+
+	def compile(self, idx):
+		ret2 = Port(self.ast)
+		ret2.set_dir(self._class[idx] + 'put')
+
+		ret = Array(self.ast)
+		ret.set_value(ret2)
+		if self.width:
+			ret.set_width(self.width)
+		return ret.compile()
+
+@for_all_methods(wrap)
+class Interface:
+	def __init__(self, ast):
+		self.ast = ast
+		self.scope = Scope()
+		self._class = []
+
+		# Convenient filtered symbols
+		self.param = []
+		self.port = []
+
+	def add_param(self, arg):
+		self.param.append(arg)
+		self.scope.add(arg)
+
+	def add_port(self, arg):
+		self.port.append(arg)
+		self.scope.add(arg)
+
+	def add_class(self, arg):
+		if arg in self._class:
+			raise Exception()
+		self._class.append(arg)
+
+	def compile(self, _class, param=Scope()):
+		if _class not in self._class:
+			raise Exception()
+
+		ret = Interface(self.ast)
+
+		ret._class = self._class
+
+		for i in self.param:
+			ret.add_param(i.clone(param.lookup_try(i.name, i).value))
+		for i in self.port:
+			ret.add_port(i.clone())
+
+		SCOPE.push(ret.scope)
+
+		for i in ret.param:
+			i.compile_value()
+
+		idx = self._class.index(_class)
+		for i in ret.port:
+			i.compile_value(idx)
+
+		SCOPE.pop()
+		return ret
+
+	def hier(self, src, field):
+		return None
+
+	def to_verilog(self, name):
+		def _hier_name(field):
+			return f'{name}__{field}'
+
+		ret = Formatter()
+
+		if self.port:
+			ret += ',\n'.join([i.value.to_verilog(_hier_name(i.name)) for i in self.port])
+
+		return str(ret)
+
+@for_all_methods(wrap)
+class InterfaceInstance:
+	def __init__(self, ast):
+		self.ast = ast
+		self.namespace = None
+		self.field = None
+		self.inst = None
+
+	def set_namespace(self, arg):
+		self.namespace = arg
+
+	def set_field(self, arg):
+		self.field = arg
+
+	def compile(self):
+		ret = InterfaceInstance(self.ast)
+		ret.set_namespace(self.namespace)
+		ret.inst = SCOPE.lookup(self.namespace).value.compile(self.field)
+		return ret
+
+	def resolve_hier(self, field):
+		return self.inst.scope.lookup(field.name).value
+
+	def to_verilog_hier(self, namespace, field):
+		return f'{namespace.to_verilog()}__{field.name}'
+
+	def to_verilog_slice(self, name, dim=(None, None), count=(None, None)):
+		ret = name
+		if dim[0]:
+			ret += f'__{dim[0].to_verilog()}'
+		return ret
+
+	def to_verilog(self, name, shape):
+		count, _ = shape
+
+		if count:
+			if count.to_int() == 0:
+				raise Exception()
+			if count.to_int() > 1:
+				for i in range(count.to_int()):
+					return ',\n'.join(self.inst.to_verilog(f'{name}__{i}') for i in range(count.to_int()))
+
+		return self.inst.to_verilog(name)
+
+@for_all_methods(wrap)
 class Module:
 	def __init__(self):
 		self.scope = Scope()
@@ -1596,6 +1728,7 @@ top:
 		listof:
 			$module_def: @top_add
 			$external_def: @top_add
+			$interface_def: @top_add
 """)
 class Top:
 	def top_add(stack, ast, delta):
@@ -1679,6 +1812,95 @@ class ParseExternal:
 			stack.last.add_port(i)
 
 @parser("""
+interface_def:
+	tree: @symbol_create
+		identifier: @symbol_set_name
+		$interface: @symbol_set_value
+
+interface:
+	seqof:
+		oneof: @interface_create
+			identifier: 'interface'
+			tree:
+				identifier: 'interface'
+				listof:
+					binary: @interface_add_param, @symbol_create
+						operator: '='
+						identifier: @symbol_set_name
+						$expr: @symbol_set_value
+		tree:
+			identifier: 'port'
+			$interface_ports
+			listof: #optional
+				$interface_port: @interface_add_port
+
+interface_ports:
+	oneof:
+		identifier: @interface_add_class
+		binary:
+			operator: '/'
+			$interface_ports
+			identifier: @interface_add_class
+
+interface_port:
+	tree: @symbol_create
+		identifier: @symbol_set_name
+		tree: @symbol_set_value
+			oneof: @interface_port_desc_create
+				identifier: 'net'
+				aref:
+					identifier: 'net'
+					$expr: @interface_port_desc_set_width
+			$interface_ports
+
+interface_port_decl:
+	oneof: @interface_instance_create
+		$interface_hier
+
+interface_hier:
+	binary:
+		operator: '.'
+		identifier: @interface_instance_set_namespace
+		identifier: @interface_instance_set_field
+""")
+class ParseInterface:
+	def interface_create(stack, ast, delta):
+		if delta > 0:
+			stack.push(Interface(ast))
+
+	def interface_add_param(stack, ast, delta):
+		if delta < 0:
+			i = stack.pop()
+			stack.last.add_param(i)
+
+	def interface_add_port(stack, ast, delta):
+		if delta < 0:
+			i = stack.pop()
+			stack.last.add_port(i)
+
+	def interface_add_class(stack, ast, delta):
+		stack.last.add_class(LOP.LOP_symbol_value(ast).decode())
+
+	def interface_port_desc_create(stack, ast, delta):
+		if delta > 0:
+			stack.push(InterfacePortDesc(ast))
+
+	def interface_port_desc_set_width(stack, ast, delta):
+		if delta < 0:
+			i = stack.pop()
+			stack.last.set_width(i)
+
+	def interface_instance_create(stack, ast, delta):
+		if delta > 0:
+			stack.push(InterfaceInstance(ast))
+
+	def interface_instance_set_namespace(stack, ast, delta):
+		stack.last.set_namespace(LOP.LOP_symbol_value(ast).decode())
+
+	def interface_instance_set_field(stack, ast, delta):
+		stack.last.set_field(LOP.LOP_symbol_value(ast).decode())
+
+@parser("""
 module_def:
 	tree: @symbol_create
 		identifier: @symbol_set_name
@@ -1756,12 +1978,14 @@ port:
 			identifier: @symbol_set_name
 			oneof: @array_create
 				$inout
+				$interface_port_decl: @array_set_value
 		tree: @symbol_set_value
 			aref:
 				identifier: @symbol_set_name
 				$expr: @array_create, @array_set_count
 			oneof:
 				$inout
+				$interface_port_decl: @array_set_value
 
 inout:
 	oneof:
