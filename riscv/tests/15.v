@@ -14,25 +14,25 @@ endmodule
 module test();
 	localparam B = 16;
 	localparam A = 2;
-	wire b__0__p;
-	reg b__0__x;
-	reg [4:0] b__0__z;
-	wire [5:0] b__0__y;
-	SubModule_Z_6_B2_5 b__0(
-		.p(b__0__p),
-		.x(b__0__x),
-		.z(b__0__z),
-		.y(b__0__y)
+	wire b_0__p;
+	reg b_0__x;
+	reg [4:0] b_0__z;
+	wire [5:0] b_0__y;
+	SubModule_Z_6_B2_5 b_0(
+		.p(b_0__p),
+		.x(b_0__x),
+		.z(b_0__z),
+		.y(b_0__y)
 	);
-	wire b__1__p;
-	reg b__1__x;
-	reg [4:0] b__1__z;
-	wire [5:0] b__1__y;
-	SubModule_Z_6_B2_5 b__1(
-		.p(b__1__p),
-		.x(b__1__x),
-		.z(b__1__z),
-		.y(b__1__y)
+	wire b_1__p;
+	reg b_1__x;
+	reg [4:0] b_1__z;
+	wire [5:0] b_1__y;
+	SubModule_Z_6_B2_5 b_1(
+		.p(b_1__p),
+		.x(b_1__x),
+		.z(b_1__z),
+		.y(b_1__y)
 	);
 endmodule
 

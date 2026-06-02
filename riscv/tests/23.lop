@@ -1,0 +1,17 @@
+Interface: interface
+	port: Master / Slave
+		a: net: out / in
+		b: net[2]: in / out
+
+test: module
+	port:
+		a: Interface.Master
+		b: Interface.Slave
+		c[2]: Interface.Slave
+
+	a.a = a.b[0]
+
+	for: i
+		b.a = c[0].b[i]
+	for: i
+		b.a = c[i].b[0]

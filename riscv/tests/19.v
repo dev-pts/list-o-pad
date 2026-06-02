@@ -26,6 +26,7 @@ module test();
 		.z(b__z)
 	);
 	wire [2:0] c__y;
+
 	SubModule c(
 		.y(c__y),
 		.z(1'h0)

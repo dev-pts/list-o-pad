@@ -49,9 +49,9 @@ endmodule
 
 module test();
 	wire a__a;
-	wire a__b_0; wire a__b_1;
+	wire a__b_0;wire a__b_1;
 	wire [2:0] a__c;
-	wire [2:0] a__d_0; wire [2:0] a__d_1;
+	wire [2:0] a__d_0;wire [2:0] a__d_1;
 	SubModule a(
 		.a(a__a),
 		.b_0(a__b_0),

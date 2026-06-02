@@ -12,25 +12,29 @@ endmodule
 module test();
 	localparam B = 16;
 	localparam A = 2;
-	reg [1:0] b__0__z;
-	wire [2:0] b__0__y;
-	SubModule b__0(
+
+
+	reg [1:0] b_0__z;
+	wire [2:0] b_0__y;
+	SubModule b_0(
 		.p(k[0][1]),
 		.x(1'd1),
-		.z(b__0__z),
-		.y(b__0__y)
+		.z(b_0__z),
+		.y(b_0__y)
 	);
-	reg [1:0] b__1__z;
-	wire [2:0] b__1__y;
-	SubModule b__1(
+
+
+	reg [1:0] b_1__z;
+	wire [2:0] b_1__y;
+	SubModule b_1(
 		.p(k[0][1]),
 		.x(1'd1),
-		.z(b__1__z),
-		.y(b__1__y)
+		.z(b_1__z),
+		.y(b_1__y)
 	);
-	wire [1:0] k [2:0];
-	always @(b__0__z) begin
-		b__0__z <= 16;
+	reg [1:0] k [2:0];
+	always @(b_0__z) begin
+		b_0__z <= 16;
 	end
 endmodule
 

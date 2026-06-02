@@ -275,6 +275,65 @@ class Interface:
 	def hier(self, src, field):
 		return None
 
+	def connect(self, src_a, src_b):
+		ret = Block(self.ast)
+
+		inst_a = src_a.is_instance()
+		inst_b = src_b.is_instance()
+
+		if inst_a:
+			filter_dir = 'input'
+		else:
+			filter_dir = 'output'
+
+		a_to_b = []
+		b_to_a = []
+
+		for i in self.port:
+			p = i.resolve()
+			if p == 'inout':
+				continue
+			if p.dir == filter_dir:
+				a_to_b.append(i)
+			else:
+				b_to_a.append(i)
+
+		for i in a_to_b:
+			ret.add(
+				Statement(self.ast).set_comb(
+					Assign(self.ast)
+						.set_lhs(
+							Hier(self.ast)
+								.set_namespace(src_a)
+								.set_field(Identifier(src_a.ast, i.name))
+						)
+						.set_rhs(
+							Hier(self.ast)
+								.set_namespace(src_b)
+								.set_field(Identifier(src_b.ast, i.name))
+						)
+				)
+			)
+
+		for i in b_to_a:
+			ret.add(
+				Statement(self.ast).set_comb(
+					Assign(self.ast)
+						.set_lhs(
+							Hier(self.ast)
+								.set_namespace(src_b)
+								.set_field(Identifier(src_b.ast, i.name))
+						)
+						.set_rhs(
+							Hier(self.ast)
+								.set_namespace(src_a)
+								.set_field(Identifier(src_a.ast, i.name))
+						)
+				)
+			)
+
+		return ret.compile()
+
 	def to_verilog(self, name):
 		def _hier_name(field):
 			return f'{name}__{field}'
@@ -306,16 +365,25 @@ class InterfaceInstance:
 		ret.inst = SCOPE.lookup(self.namespace).value.compile(self.field)
 		return ret
 
+	def resolve(self):
+		return self
+
 	def resolve_hier(self, field):
 		return self.inst.scope.lookup(field.name).value
+
+	def connect(self, src_a, src_b):
+		return self.inst.connect(src_a, src_b)
+
+	def is_instance(self):
+		return False
 
 	def to_verilog_hier(self, namespace, field):
 		return f'{namespace.to_verilog()}__{field.name}'
 
-	def to_verilog_slice(self, name, dim=(None, None), count=(None, None)):
+	def to_verilog_slice(self, name, dim, shape):
 		ret = name
 		if dim[0]:
-			ret += f'__{dim[0].to_verilog()}'
+			ret += f'_{dim[0].to_verilog()}'
 		return ret
 
 	def to_verilog(self, name, shape):
@@ -326,9 +394,25 @@ class InterfaceInstance:
 				raise Exception()
 			if count.to_int() > 1:
 				for i in range(count.to_int()):
-					return ',\n'.join(self.inst.to_verilog(f'{name}__{i}') for i in range(count.to_int()))
+					return ',\n'.join(self.inst.to_verilog(f'{name}_{i}') for i in range(count.to_int()))
 
 		return self.inst.to_verilog(name)
+
+	def to_verilog_inst_port(self, name, shape):
+		ret = Formatter()
+
+		for i in self.inst.port:
+			ret += i.to_verilog_inst_port(name) + '\n'
+
+		return ret
+
+	def to_verilog_bind(self, name):
+		binds = {}
+
+		for i in self.inst.port:
+			binds.update(i.to_verilog_bind(name))
+
+		return binds
 
 @for_all_methods(wrap)
 class Module:
@@ -467,9 +551,6 @@ class Port:
 	def dim(self):
 		return ()
 
-	def create_local(self):
-		return Net(self.ast)
-
 	def resolve(self):
 		return self
 
@@ -504,7 +585,7 @@ class Port:
 
 		return ret
 
-	def to_verilog_slice(self, name, dim=(None, None), shape=(None, None)):
+	def to_verilog_slice(self, name, dim, shape):
 		count, width = shape
 
 		if count == None:
@@ -521,20 +602,28 @@ class Port:
 			ret += f'[{wi.to_verilog()}]'
 		return ret
 
-	def to_verilog_inst_port(self, name, dim=(None, None), shape=(None, None)):
-		count, width = shape
+	def to_verilog_inst_port(self, name, shape):
+		if self.binding:
+			return ''
+
+		_, width = shape
 
 		if self.dir == 'input':
 			prefix = 'reg '
 		else:
 			prefix = 'wire '
 
-		if count and count.to_int() > 1:
-			ret = '; '.join([self._to_verilog_one(prefix, name, width, i) for i in range(count.to_int())])
-		else:
-			return self._to_verilog_one(prefix, name, width, None)
+		return self._to_verilog_one(prefix, name, width, None) + ';'
 
-		return ret
+	def to_verilog_bind(self, name):
+		binds = {}
+
+		if self.binding:
+			binds[name] = self.binding.to_verilog()
+		else:
+			binds[name] = name
+
+		return binds
 
 @for_all_methods(wrap)
 class Net:
@@ -656,13 +745,6 @@ class Array:
 	def operator(self, op, op2):
 		return None
 
-	def create_local(self):
-		ret = Array(self.ast)
-		ret.set_count(self.shape[0])
-		ret.set_width(self.shape[1])
-		ret.set_value(self.value.create_local())
-		return ret
-
 	def resolve(self):
 		return self.value.resolve()
 
@@ -680,17 +762,23 @@ class Array:
 	def dim(self):
 		return self.shape
 
+	def is_instance(self):
+		return self.value.is_instance()
+
 	def to_verilog(self, name):
 		return self.value.to_verilog(name, self.shape)
 
-	def to_verilog_slice(self, name, dim=(None, None)):
+	def to_verilog_slice(self, name, dim):
 		return self.value.to_verilog_slice(name, dim, self.shape)
 
 	def to_verilog_hier(self, namespace, field):
 		return self.value.to_verilog_hier(namespace, field)
 
-	def to_verilog_inst_port(self, name, dim=(None, None)):
-		return self.value.to_verilog_inst_port(name, dim, self.shape)
+	def to_verilog_inst_port(self, name):
+		return self.value.to_verilog_inst_port(name, self.shape)
+
+	def to_verilog_bind(self, name):
+		return self.value.to_verilog_bind(name)
 
 @for_all_methods(wrap)
 class Symbol:
@@ -709,11 +797,8 @@ class Symbol:
 	def resolve(self):
 		return self.value.resolve()
 
-	def create_local(self, name):
-		ret = Symbol(self.ast)
-		ret.set_name(name)
-		ret.set_value(self.value.create_local())
-		return ret
+	def dim(self):
+		return self.value.dim()
 
 	def clone(self, value=None):
 		ret = Symbol(self.ast)
@@ -728,6 +813,39 @@ class Symbol:
 			self.value = self.value.compile(*args, **kwargs)
 			self.compiled = True
 		return self.value
+
+	def to_verilog_inst_port(self, name):
+		count, _ = self.dim()
+
+		ret = Formatter()
+
+		if count and count.to_int() > 1:
+			for k in range(count.to_int()):
+				pname = self.to_verilog_slice((Number(None, k), None))
+
+				ret += self.value.to_verilog_inst_port(f'{name}__{pname}')
+		else:
+			ret += self.value.to_verilog_inst_port(f'{name}__{self.name}')
+
+		return ret
+
+	def to_verilog_slice(self, dim):
+		return self.value.to_verilog_slice(self.name, dim)
+
+	def to_verilog_bind(self, name):
+		binds = {}
+
+		count, _ = self.dim()
+
+		if count and count.to_int() > 1:
+			for k in range(count.to_int()):
+				pname = self.to_verilog_slice((Number(None, k), None))
+
+				binds.update(self.value.to_verilog_bind(f'{name}__{pname}'))
+		else:
+			binds.update(self.value.to_verilog_bind(f'{name}__{self.name}'))
+
+		return binds
 
 system = {}
 
@@ -761,9 +879,13 @@ def sh_bind(ast, args):
 	port.set_binding(args[1])
 	return Empty()
 
+def sh_connect(ast, args):
+	return args[0].resolve().resolve().connect(args[0], args[1])
+
 system['z'] = sh_z
 system['goto'] = sh_goto
 system['bind'] = sh_bind
+system['connect'] = sh_connect
 
 class Empty:
 	def get_sens(self):
@@ -817,6 +939,9 @@ class Identifier:
 
 	def slice(self, hi, lo):
 		return self.ref.slice(hi, lo)
+
+	def is_instance(self):
+		return self.ref.is_instance()
 
 	def to_verilog(self):
 		return self.name
@@ -990,6 +1115,7 @@ class Statement:
 
 	def set_comb(self, i):
 		self.comb = i
+		return self
 
 	def compile(self):
 		ret = Statement(self.ast)
@@ -1148,9 +1274,11 @@ class Assign:
 
 	def set_lhs(self, lhs):
 		self.lhs = lhs
+		return self
 
 	def set_rhs(self, rhs):
 		self.rhs = rhs
+		return self
 
 	def compile(self):
 		ret = Assign(self.ast)
@@ -1295,9 +1423,11 @@ class Hier:
 
 	def set_namespace(self, arg):
 		self.namespace = arg
+		return self
 
 	def set_field(self, arg):
 		self.field = arg
+		return self
 
 	def compile(self):
 		ret = Hier(self.ast)
@@ -1318,15 +1448,17 @@ class Hier:
 	def slice(self, hi, lo):
 		return self.ref.slice(hi, lo)
 
+	def is_instance(self):
+		return self.namespace.is_instance()
+
 	def to_verilog(self):
 		return self.namespace.resolve().to_verilog_hier(self.namespace, self.field)
-		return f'{self.namespace.to_verilog()}__{self.field.name}'
 
 	def to_verilog_slice(self, dim):
 		return self.ref.to_verilog_slice(self.namespace.resolve().to_verilog_hier(self.namespace, self.field), dim)
 
 	def get_sens(self):
-		return { self.namespace.to_verilog_hier(self.namespace, self.field): None }
+		return { self.namespace.resolve().to_verilog_hier(self.namespace, self.field): None }
 
 @for_all_methods(wrap)
 class Binary:
@@ -1536,13 +1668,13 @@ class Slice:
 		return self.resolve().operator(op, op2)
 
 	def resolve(self):
-		ret = self.value.resolve()
-		if type(ret) == Array:
-			return ret.value
-		return ret
+		return self.value.resolve()
 
 	def slice(self, hi, lo):
 		return None
+
+	def is_instance(self):
+		return self.value.is_instance()
 
 	def to_verilog(self):
 		return self.value.to_verilog_slice((self.hilo, None))
@@ -1586,37 +1718,21 @@ class Instance:
 	def dim(self):
 		return ()
 
-	def _hier_name(self, name, field):
-		return f'{name}__{field}'
+	def is_instance(self):
+		return True
 
 	def _to_verilog_one(self, mname, name, param):
 		m = self.inst
 
 		ret = Formatter()
 
+		for i in m.port:
+			ret += i.to_verilog_inst_port(name) + '\n'
+
 		binds = {}
 
 		for i in m.port:
-			t = i.value.resolve()
-			count, _ = i.value.dim()
-
-			if not t.binding:
-				p = i.value.to_verilog_inst_port(self._hier_name(name, i.name))
-				ret += p + ';\n'
-
-			if count and count.to_int() > 1:
-				for k in range(count.to_int()):
-					pname = i.value.to_verilog_slice(i.name, dim=(Number(None, k), None))
-
-					if t.binding:
-						binds[pname] = i.value.resolve().resolve().binding.to_verilog()
-					else:
-						binds[pname] = self._hier_name(name, pname)
-			else:
-				if t.binding:
-					binds[i.name] = i.value.resolve().resolve().binding.to_verilog()
-				else:
-					binds[i.name] = self._hier_name(name, i.name)
+			binds.update(i.to_verilog_bind(name))
 
 		ret += f'{mname} '
 		if param:
@@ -1629,7 +1745,7 @@ class Instance:
 		if m.port:
 			ret += '\n'
 			ret.tab()
-			ret += ',\n'.join([f'.{i}({binds[i]})' for i in binds])
+			ret += ',\n'.join([f'.{i[len(name) + 2:]}({binds[i]})' for i in binds])
 			ret += '\n'
 			ret.untab()
 		ret += f');\n'
@@ -1656,7 +1772,7 @@ class Instance:
 
 		if count:
 			for i in range(count.to_int()):
-				ret += self._to_verilog_one(mname, f'{name}__{i}', param)
+				ret += self._to_verilog_one(mname, f'{name}_{i}', param)
 		else:
 			ret += self._to_verilog_one(mname, name, param)
 
@@ -1671,7 +1787,7 @@ class Instance:
 	def to_verilog_slice(self, name, dim=(None, None), count=(None, None)):
 		ret = name
 		if dim[0]:
-			ret += f'__{dim[0].to_verilog()}'
+			ret += f'_{dim[0].to_verilog()}'
 		return ret
 
 SYNTAX = []
