@@ -41,3 +41,4 @@ test: module
 	$connect(d.e, d.f)
 	$connect(d.f, d.e)
 	$connect(e[0].e, e[1].f)
+	$connect(e[0].g[0], e[1].h[1])
