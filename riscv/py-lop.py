@@ -204,6 +204,7 @@ class InterfacePortDesc:
 		self.ast = ast
 		self._class = []
 		self.width = None
+		self.interface = None
 
 	def add_class(self, arg):
 		if arg in self._class:
@@ -213,7 +214,16 @@ class InterfacePortDesc:
 	def set_width(self, arg):
 		self.width = arg
 
+	def set_interface(self, arg):
+		self.interface = arg
+
 	def compile(self, idx):
+		if self.interface:
+			ret = InterfaceInstance(self.ast)
+			ret.set_namespace(self.interface)
+			ret.set_field(self._class[idx])
+			return ret.compile()
+
 		ret2 = Port(self.ast)
 		ret2.set_dir(self._class[idx] + 'put')
 
@@ -275,64 +285,11 @@ class Interface:
 	def hier(self, src, field):
 		return None
 
-	def connect(self, src_a, src_b):
-		ret = Block(self.ast)
-
-		inst_a = src_a.is_instance()
-		inst_b = src_b.is_instance()
-
-		if inst_a:
-			filter_dir = 'input'
-		else:
-			filter_dir = 'output'
-
-		a_to_b = []
-		b_to_a = []
-
+	def get_ports(self, filter_dir, src):
+		ret = []
 		for i in self.port:
-			p = i.resolve()
-			if p == 'inout':
-				continue
-			if p.dir == filter_dir:
-				a_to_b.append(i)
-			else:
-				b_to_a.append(i)
-
-		for i in a_to_b:
-			ret.add(
-				Statement(self.ast).set_comb(
-					Assign(self.ast)
-						.set_lhs(
-							Hier(self.ast)
-								.set_namespace(src_a)
-								.set_field(Identifier(src_a.ast, i.name))
-						)
-						.set_rhs(
-							Hier(self.ast)
-								.set_namespace(src_b)
-								.set_field(Identifier(src_b.ast, i.name))
-						)
-				)
-			)
-
-		for i in b_to_a:
-			ret.add(
-				Statement(self.ast).set_comb(
-					Assign(self.ast)
-						.set_lhs(
-							Hier(self.ast)
-								.set_namespace(src_b)
-								.set_field(Identifier(src_b.ast, i.name))
-						)
-						.set_rhs(
-							Hier(self.ast)
-								.set_namespace(src_a)
-								.set_field(Identifier(src_a.ast, i.name))
-						)
-				)
-			)
-
-		return ret.compile()
+			ret.extend(i.resolve().get_ports(filter_dir, Hier(src.ast).set_namespace(src).set_field(Identifier(src.ast, i.name))))
+		return ret
 
 	def to_verilog(self, name):
 		def _hier_name(field):
@@ -365,6 +322,9 @@ class InterfaceInstance:
 		ret.inst = SCOPE.lookup(self.namespace).value.compile(self.field)
 		return ret
 
+	def dim(self):
+		return (None, None)
+
 	def resolve(self):
 		return self
 
@@ -377,6 +337,12 @@ class InterfaceInstance:
 	def is_instance(self):
 		return False
 
+	def get_ports(self, filter_dir, src):
+		ret = []
+		for i in self.inst.port:
+			ret.extend(i.resolve().get_ports(filter_dir, Hier(src.ast).set_namespace(src).set_field(Identifier(src.ast, i.name))))
+		return ret
+
 	def to_verilog_hier(self, namespace, field):
 		return f'{namespace.to_verilog()}__{field.name}'
 
@@ -386,7 +352,7 @@ class InterfaceInstance:
 			ret += f'_{dim[0].to_verilog()}'
 		return ret
 
-	def to_verilog(self, name, shape):
+	def to_verilog(self, name, shape=(None, None)):
 		count, _ = shape
 
 		if count:
@@ -398,7 +364,7 @@ class InterfaceInstance:
 
 		return self.inst.to_verilog(name)
 
-	def to_verilog_inst_port(self, name, shape):
+	def to_verilog_inst_port(self, name, shape=(None, None)):
 		ret = Formatter()
 
 		for i in self.inst.port:
@@ -559,6 +525,11 @@ class Port:
 
 	def slice(self, hi, lo):
 		return None
+
+	def get_ports(self, filter_dir, src):
+		if self.dir == filter_dir:
+			return [src]
+		return []
 
 	def _to_verilog_one(self, prefix, name, width, idx):
 		ret = prefix
@@ -880,7 +851,56 @@ def sh_bind(ast, args):
 	return Empty()
 
 def sh_connect(ast, args):
-	return args[0].resolve().resolve().connect(args[0], args[1])
+	src_a = args[0]
+	src_b = args[1]
+
+	inst_a = src_a.is_instance()
+	inst_b = src_b.is_instance()
+
+	if inst_a:
+		a_lhs = 'input'
+		a_rhs = 'output'
+	else:
+		a_lhs = 'output'
+		a_rhs = 'input'
+
+	if inst_b:
+		b_lhs = 'input'
+		b_rhs = 'output'
+	else:
+		b_lhs = 'output'
+		b_rhs = 'input'
+
+	if_a = src_a.resolve().resolve()
+	if_b = src_b.resolve().resolve()
+
+	ret = Block(ast)
+
+	ports_a = if_a.get_ports(a_lhs, src_a)
+	ports_b = if_b.get_ports(b_rhs, src_b)
+
+	for i in range(len(ports_a)):
+		ret.add(
+			Statement(ast).set_comb(
+				Assign(ast)
+					.set_lhs(ports_a[i])
+					.set_rhs(ports_b[i])
+			)
+		)
+
+	ports_a = if_a.get_ports(a_rhs, src_a)
+	ports_b = if_b.get_ports(b_lhs, src_b)
+
+	for i in range(len(ports_b)):
+		ret.add(
+			Statement(ast).set_comb(
+				Assign(ast)
+					.set_lhs(ports_b[i])
+					.set_rhs(ports_a[i])
+			)
+		)
+
+	return ret.compile()
 
 system['z'] = sh_z
 system['goto'] = sh_goto
@@ -1967,6 +1987,7 @@ interface_port:
 				aref:
 					identifier: 'net'
 					$expr: @interface_port_desc_set_width
+				identifier: @interface_port_desc_set_interface
 			$interface_ports
 
 interface_port_decl:
@@ -2005,6 +2026,9 @@ class ParseInterface:
 		if delta < 0:
 			i = stack.pop()
 			stack.last.set_width(i)
+
+	def interface_port_desc_set_interface(stack, ast, delta):
+		stack.last.set_interface(LOP.LOP_symbol_value(ast).decode())
 
 	def interface_instance_create(stack, ast, delta):
 		if delta > 0:

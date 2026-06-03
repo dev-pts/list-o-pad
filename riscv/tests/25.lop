@@ -1,0 +1,33 @@
+Interface: interface
+	port: Master / Slave
+		a: net: out / in
+		b: net[2]: in / out
+
+Interface2: interface
+	port: Master / Slave
+		c: net: out / in
+		d: Interface: Slave / Master
+
+SubModule: module
+	port:
+		e: Interface2.Master
+		f: Interface2.Slave
+		g[2]: Interface2.Master
+		h[3]: Interface2.Slave
+
+test: module
+	port:
+		a: Interface2.Master
+		b: Interface2.Slave
+	local:
+		c: SubModule
+		d[2]: SubModule
+
+	$connect(a, b)
+	$connect(c.e, c.f)
+	$connect(c.e.d, c.f.d)
+	$connect(c.g[0], c.h[1])
+	$connect(c.g[0].d, c.h[1].d)
+	$connect(d[1].g[0].d, d[0].h[1].d)
+
+	$connect(c.e, a)

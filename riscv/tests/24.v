@@ -133,7 +133,7 @@ module test(
 		.j_0(e_1__j_0),
 		.j_1(e_1__j_1)
 	);
-	always @(a__a, a__b[0], c_0__b[0], b__a, c_0__b[1], c_1__b[0], b__b[0], c_0__a, b__b[1], c_1__a, c_0__b, a__b, c_1__b, b__b, d__f__b, d__f__a, d__e__b, d__e__a, e_0__e__b, e_1__f__b, e_1__f__a, e_0__e__a) begin
+	always @(a__a, a__b[0], c_0__b[0], b__a, c_0__b[1], c_1__b[0], b__b[0], c_0__a, b__b[1], c_1__a, c_0__b, a__b, c_1__b, b__b, d__f__b, d__f__a, d__e__b, d__e__a, e_0__e__b, e_1__f__b, e_1__f__a, e_0__e__a, e_0__g_0__b, e_1__h_1__b, e_1__h_1__a, e_0__g_0__a) begin
 		a__a <= a__b[0];
 		c_0__b[0] <= b__a;
 		c_0__b[1] <= b__a;
@@ -155,6 +155,8 @@ module test(
 		d__e__b <= d__f__b;
 		e_0__e__b <= e_1__f__b;
 		e_1__f__a <= e_0__e__a;
+		e_0__g_0__b <= e_1__h_1__b;
+		e_1__h_1__a <= e_0__g_0__a;
 	end
 endmodule
 
