@@ -1,6 +1,7 @@
 test: module:
 		B = A * 8
 		A = 2
+		B2 = 9
 	local:
 		b[2]: SubModule(Z = B2 + 1, B2 = 5)
 

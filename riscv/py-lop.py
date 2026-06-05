@@ -181,7 +181,11 @@ class External:
 		ret = External()
 
 		for i in self.param:
-			ret.add_param(i.clone(param.lookup_try(i.name, i).value))
+			ret.add_param(i.clone())
+		for i in param.scope:
+			p = ret.scope.lookup(i)
+			p.set_value(param.lookup(i).value.compile())
+
 		for i in self.port:
 			ret.add_port(i.clone())
 
@@ -205,6 +209,7 @@ class InterfacePortDesc:
 		self._class = []
 		self.width = None
 		self.interface = None
+		self.param = Scope()
 
 	def add_class(self, arg):
 		if arg in self._class:
@@ -217,11 +222,15 @@ class InterfacePortDesc:
 	def set_interface(self, arg):
 		self.interface = arg
 
+	def add_param(self, arg):
+		self.param.add(arg)
+
 	def compile(self, idx):
 		if self.interface:
 			ret = InterfaceInstance(self.ast)
 			ret.set_namespace(self.interface)
 			ret.set_field(self._class[idx])
+			ret.param = self.param
 			return ret.compile()
 
 		ret2 = Port(self.ast)
@@ -266,7 +275,11 @@ class Interface:
 		ret._class = self._class
 
 		for i in self.param:
-			ret.add_param(i.clone(param.lookup_try(i.name, i).value))
+			ret.add_param(i.clone())
+		for i in param.scope:
+			p = ret.scope.lookup(i)
+			p.set_value(param.lookup(i).value.compile())
+
 		for i in self.port:
 			ret.add_port(i.clone())
 
@@ -309,6 +322,8 @@ class InterfaceInstance:
 		self.namespace = None
 		self.field = None
 		self.inst = None
+		self.param = Scope()
+		self.proto = None
 
 	def set_namespace(self, arg):
 		self.namespace = arg
@@ -316,10 +331,17 @@ class InterfaceInstance:
 	def set_field(self, arg):
 		self.field = arg
 
+	def add_param(self, arg):
+		self.param.add(arg)
+
 	def compile(self):
 		ret = InterfaceInstance(self.ast)
-		ret.set_namespace(self.namespace)
-		ret.inst = SCOPE.lookup(self.namespace).value.compile(self.field)
+		ret.inst = SCOPE.lookup(self.namespace).value.compile(self.field, param=self.param)
+
+		mname = self.namespace
+		for i in self.param.scope:
+			mname += f'_{i}_{ret.inst.scope.lookup(i).value.to_verilog()}'
+		ret.proto = mname.translate(str.maketrans(".-", "_n"))
 		return ret
 
 	def dim(self):
@@ -330,9 +352,6 @@ class InterfaceInstance:
 
 	def resolve_hier(self, field):
 		return self.inst.scope.lookup(field.name).value
-
-	def connect(self, src_a, src_b):
-		return self.inst.connect(src_a, src_b)
 
 	def is_instance(self):
 		return False
@@ -420,7 +439,11 @@ class Module:
 		ret = Module()
 
 		for i in self.param:
-			ret.add_param(i.clone(param.lookup_try(i.name, i).value))
+			ret.add_param(i.clone())
+		for i in param.scope:
+			p = ret.scope.lookup(i)
+			p.set_value(param.lookup(i).value.compile())
+
 		for i in self.const:
 			ret.add_const(i.clone())
 		for i in self.port:
@@ -771,12 +794,10 @@ class Symbol:
 	def dim(self):
 		return self.value.dim()
 
-	def clone(self, value=None):
+	def clone(self):
 		ret = Symbol(self.ast)
 		ret.set_name(self.name)
-		if value == None:
-			value = self.value
-		ret.set_value(value)
+		ret.set_value(self.value)
 		return ret
 
 	def compile_value(self, *args, **kwargs):
@@ -851,52 +872,52 @@ def sh_bind(ast, args):
 	return Empty()
 
 def sh_connect(ast, args):
-	src_a = args[0]
-	src_b = args[1]
+	def _get_list(src):
+		inst = src.is_instance()
 
-	inst_a = src_a.is_instance()
-	inst_b = src_b.is_instance()
+		if inst:
+			lhs_filter = 'input'
+			rhs_filter = 'output'
+		else:
+			lhs_filter = 'output'
+			rhs_filter = 'input'
 
-	if inst_a:
-		a_lhs = 'input'
-		a_rhs = 'output'
-	else:
-		a_lhs = 'output'
-		a_rhs = 'input'
+		intf = src.resolve().resolve()
 
-	if inst_b:
-		b_lhs = 'input'
-		b_rhs = 'output'
-	else:
-		b_lhs = 'output'
-		b_rhs = 'input'
+		lhs_list = intf.get_ports(lhs_filter, src)
+		rhs_list = intf.get_ports(rhs_filter, src)
 
-	if_a = src_a.resolve().resolve()
-	if_b = src_b.resolve().resolve()
+		return lhs_list, rhs_list
+
+	a_intf = args[0].resolve().resolve()
+	b_intf = args[1].resolve().resolve()
+
+	if a_intf.proto != b_intf.proto:
+		raise Exception(f'Interfaces are incompatible: they differ by name and parameters: {a_intf.proto} != {b_intf.proto}')
+
+	a_lhs, a_rhs = _get_list(args[0])
+	b_lhs, b_rhs = _get_list(args[1])
+
+	if len(a_lhs) != len(b_rhs) or len(a_rhs) != len(b_lhs):
+		raise Exception('Interfaces are incompatible: their port directions are not compatible')
 
 	ret = Block(ast)
 
-	ports_a = if_a.get_ports(a_lhs, src_a)
-	ports_b = if_b.get_ports(b_rhs, src_b)
-
-	for i in range(len(ports_a)):
+	for i in range(len(a_lhs)):
 		ret.add(
 			Statement(ast).set_comb(
 				Assign(ast)
-					.set_lhs(ports_a[i])
-					.set_rhs(ports_b[i])
+					.set_lhs(a_lhs[i])
+					.set_rhs(b_rhs[i])
 			)
 		)
 
-	ports_a = if_a.get_ports(a_rhs, src_a)
-	ports_b = if_b.get_ports(b_lhs, src_b)
-
-	for i in range(len(ports_b)):
+	for i in range(len(b_lhs)):
 		ret.add(
 			Statement(ast).set_comb(
 				Assign(ast)
-					.set_lhs(ports_b[i])
-					.set_rhs(ports_a[i])
+					.set_lhs(b_lhs[i])
+					.set_rhs(a_rhs[i])
 			)
 		)
 
@@ -1988,17 +2009,14 @@ interface_port:
 					identifier: 'net'
 					$expr: @interface_port_desc_set_width
 				identifier: @interface_port_desc_set_interface
+				call:
+					identifier: @interface_port_desc_set_interface
+					listof:
+						binary: @symbol_create, @interface_port_desc_add_param
+							operator: '='
+							identifier: @symbol_set_name
+							$expr: @symbol_set_value
 			$interface_ports
-
-interface_port_decl:
-	oneof: @interface_instance_create
-		$interface_hier
-
-interface_hier:
-	binary:
-		operator: '.'
-		identifier: @interface_instance_set_namespace
-		identifier: @interface_instance_set_field
 """)
 class ParseInterface:
 	def interface_create(stack, ast, delta):
@@ -2030,9 +2048,38 @@ class ParseInterface:
 	def interface_port_desc_set_interface(stack, ast, delta):
 		stack.last.set_interface(LOP.LOP_symbol_value(ast).decode())
 
+	def interface_port_desc_add_param(stack, ast, delta):
+		if delta < 0:
+			i = stack.pop()
+			stack.last.add_param(i)
+
+@parser("""
+interface_port_decl:
+	oneof: @interface_instance_create
+		$interface_hier
+		call:
+			$interface_hier
+			listof:
+				binary: @symbol_create, @interface_instance_add_param
+					operator: '='
+					identifier: @symbol_set_name
+					$expr: @symbol_set_value
+
+interface_hier:
+	binary:
+		operator: '.'
+		identifier: @interface_instance_set_namespace
+		identifier: @interface_instance_set_field
+""")
+class ParseInterfaceInstance:
 	def interface_instance_create(stack, ast, delta):
 		if delta > 0:
 			stack.push(InterfaceInstance(ast))
+
+	def interface_instance_add_param(stack, ast, delta):
+		if delta < 0:
+			i = stack.pop()
+			stack.last.add_param(i)
 
 	def interface_instance_set_namespace(stack, ast, delta):
 		stack.last.set_namespace(LOP.LOP_symbol_value(ast).decode())

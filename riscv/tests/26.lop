@@ -1,0 +1,38 @@
+Interface: interface:
+		WIDTH = 3
+	port: Master / Slave
+		a: net: out / in
+		b: net[WIDTH]: in / out
+
+Interface2: interface:
+		WIDTH = 2
+	port: Master / Slave
+		c: net: out / in
+		d: Interface(WIDTH = WIDTH): Slave / Master
+
+SubModule: module:
+		WIDTH = 4
+	port:
+		e: Interface2.Master
+		f: Interface2.Slave
+		g[2]: Interface2.Master(WIDTH = WIDTH)
+		h[3]: Interface2.Slave(WIDTH = WIDTH)
+
+test: module
+	port:
+		a: Interface2.Master(WIDTH = 10)
+		a2: Interface2.Master
+		b: Interface2.Slave(WIDTH = 20)
+		b2: Interface2.Slave(WIDTH = 10)
+	local:
+		c: SubModule(WIDTH = 5)
+		d[2]: SubModule(WIDTH = 6)
+
+	$connect(a, b2)
+	$connect(c.e, c.f)
+	$connect(c.e.d, c.f.d)
+	$connect(c.g[0], c.h[1])
+	$connect(c.g[0].d, c.h[1].d)
+	$connect(d[1].g[0].d, d[0].h[1].d)
+
+	$connect(c.e, a2)
