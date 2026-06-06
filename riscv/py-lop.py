@@ -243,6 +243,44 @@ class InterfacePortDesc:
 		return ret.compile()
 
 @for_all_methods(wrap)
+class MacroCall:
+	def __init__(self, ast):
+		self.ast = ast
+		self.func = None
+
+	def set_func(self, arg):
+		self.func = arg
+
+	def compile(self):
+		return self.func.compile().resolve().expand(self.func.namespace)
+
+	def add_scope(self):
+		self.func = self.func.add_scope()
+		return self
+
+	def set_scope(self, src):
+		self.func.set_scope(src)
+
+@for_all_methods(wrap)
+class Macro:
+	def __init__(self, ast):
+		self.ast = ast
+		self.func = None
+
+	def set_func(self, arg):
+		self.func = arg
+
+	def compile(self):
+		ret = Macro(self.ast)
+		ret.set_func(self.func.add_scope())
+		return ret
+
+	def expand(self, src):
+		ret = self.func
+		ret.set_scope(src)
+		return ret.compile()
+
+@for_all_methods(wrap)
 class Interface:
 	def __init__(self, ast):
 		self.ast = ast
@@ -252,6 +290,7 @@ class Interface:
 		# Convenient filtered symbols
 		self.param = []
 		self.port = []
+		self.macro = []
 
 	def add_param(self, arg):
 		self.param.append(arg)
@@ -265,6 +304,10 @@ class Interface:
 		if arg in self._class:
 			raise Exception()
 		self._class.append(arg)
+
+	def add_macro(self, arg):
+		self.macro.append(arg)
+		self.scope.add(arg)
 
 	def compile(self, _class, param=Scope()):
 		if _class not in self._class:
@@ -282,6 +325,8 @@ class Interface:
 
 		for i in self.port:
 			ret.add_port(i.clone())
+		for i in self.macro:
+			ret.add_macro(i.clone())
 
 		SCOPE.push(ret.scope)
 
@@ -291,6 +336,8 @@ class Interface:
 		idx = self._class.index(_class)
 		for i in ret.port:
 			i.compile_value(idx)
+		for i in ret.macro:
+			i.compile_value()
 
 		SCOPE.pop()
 		return ret
@@ -970,6 +1017,9 @@ class Identifier:
 		ret.ref = ref
 		return ret
 
+	def add_scope(self):
+		return Hier(self.ast).set_field(self)
+
 	def dim(self):
 		return self.ref.dim()
 
@@ -1036,6 +1086,12 @@ class Number:
 
 	def compile(self):
 		return Number(self.ast, self.value)
+
+	def add_scope(self):
+		return self
+
+	def set_scope(self, src):
+		pass
 
 	def resolve(self):
 		return self
@@ -1164,6 +1220,13 @@ class Statement:
 		ret.set_comb(self.comb.compile())
 		return ret
 
+	def add_scope(self):
+		self.comb = self.comb.add_scope()
+		return self
+
+	def set_scope(self,src):
+		self.comb.set_scope(src)
+
 	def to_verilog(self):
 		return self.comb.to_verilog() + ';\n'
 
@@ -1184,6 +1247,15 @@ class Block:
 		for i in self.body:
 			ret.add(i.compile())
 		return ret
+
+	def add_scope(self):
+		for i in range(len(self.body)):
+			self.body[i] = self.body[i].add_scope()
+		return self
+
+	def set_scope(self, src):
+		for i in self.body:
+			i.set_scope(src)
 
 	def to_verilog(self):
 		ret = Formatter()
@@ -1328,6 +1400,15 @@ class Assign:
 		ret.set_rhs(self.rhs.compile())
 		return ret
 
+	def add_scope(self):
+		self.lhs = self.lhs.add_scope()
+		self.rhs = self.rhs.add_scope()
+		return self
+
+	def set_scope(self, src):
+		self.lhs.set_scope(src)
+		self.rhs.set_scope(src)
+
 	def to_verilog(self):
 		return f'{self.lhs.to_verilog()} <= {self.rhs.to_verilog()}'
 
@@ -1440,6 +1521,13 @@ class Unary:
 		ret.set_op1(op1)
 		return ret
 
+	def add_scope(self):
+		self.op1 = self.op1.add_scope()
+		return self
+
+	def set_scope(self,src):
+		self.op1.set_scope(src)
+
 	def operator(self, op, op2):
 		return None
 
@@ -1477,6 +1565,12 @@ class Hier:
 		ret.set_field(self.field)
 		ret.ref = ret.namespace.resolve().resolve_hier(self.field)
 		return ret
+
+	def add_scope(self):
+		return self
+
+	def set_scope(self, src):
+		self.set_namespace(src)
 
 	def resolve(self):
 		return self.ref
@@ -1533,6 +1627,15 @@ class Binary:
 		ret.set_op1(op1)
 		ret.set_op2(op2)
 		return ret
+
+	def add_scope(self):
+		self.op1 = self.op1.add_scope()
+		self.op2 = self.op2.add_scope()
+		return self
+
+	def set_scope(self, src):
+		self.op1.set_scope(src)
+		self.op2.set_scope(src)
 
 	def operator(self, op, op2):
 		return None
@@ -1614,6 +1717,19 @@ class If:
 		if self.iffalse:
 			ret.set_iffalse(self.iffalse.compile())
 		return ret
+
+	def add_scope(self):
+		self.cond = self.cond.add_scope()
+		self.iftrue = self.iftrue.add_scope()
+		if self.iffalse:
+			self.iffalse = self.iffalse.add_scope()
+		return self
+
+	def set_scope(self, src):
+		self.cond.set_scope(src)
+		self.iftrue.set_scope(src)
+		if self.iffalse:
+			self.iffalse.set_scope(src)
 
 	def operator(self, op, op2):
 		return None
@@ -1845,12 +1961,14 @@ def parser(syntax):
 @parser("""
 #operators:
 	{
-		unary: '.', '$', '@'
+		unary: '.', '$'
 
 		binary_left_to_right:
 			'.', '->'
 			'++', '--'
 	}
+
+	unary: '@'
 
 	binary_left_to_right: '**'
 
@@ -1991,6 +2109,10 @@ interface:
 			$interface_ports
 			listof: #optional
 				$interface_port: @interface_add_port
+		tree: #optional
+			identifier: 'macros'
+			listof: #optional
+				$macro: @interface_add_macro
 
 interface_ports:
 	oneof:
@@ -2018,6 +2140,26 @@ interface_port:
 							identifier: @symbol_set_name
 							$expr: @symbol_set_value
 			$interface_ports
+
+macro:
+	binary: @symbol_create
+		operator: '='
+		oneof:
+			identifier: @symbol_set_name
+			call:
+				identifier: @symbol_set_name
+				listof: #optional
+					identifier
+		oneof: @symbol_set_value, @macro_create
+			$expr: @macro_set_func
+			$block: @macro_set_func
+
+macro_call:
+	unary: @macro_call_create
+		operator: '@'
+		oneof:
+			$hier: @macro_call_set
+			$identifier: @macro_call_set
 """)
 class ParseInterface:
 	def interface_create(stack, ast, delta):
@@ -2037,6 +2179,11 @@ class ParseInterface:
 	def interface_add_class(stack, ast, delta):
 		stack.last.add_class(LOP.LOP_symbol_value(ast).decode())
 
+	def interface_add_macro(stack, ast, delta):
+		if delta < 0:
+			i = stack.pop()
+			stack.last.add_macro(i)
+
 	def interface_port_desc_create(stack, ast, delta):
 		if delta > 0:
 			stack.push(InterfacePortDesc(ast))
@@ -2053,6 +2200,24 @@ class ParseInterface:
 		if delta < 0:
 			i = stack.pop()
 			stack.last.add_param(i)
+
+	def macro_create(stack, ast, delta):
+		if delta >= 0:
+			stack.push(Macro(ast))
+
+	def macro_set_func(stack, ast, delta):
+		if delta < 0:
+			i = stack.pop()
+			stack.last.set_func(i)
+
+	def macro_call_create(stack, ast, delta):
+		if delta >= 0:
+			stack.push(MacroCall(ast))
+
+	def macro_call_set(stack, ast, delta):
+		if delta < 0:
+			i = stack.pop()
+			stack.last.set_func(i)
 
 @parser("""
 interface_port_decl:
@@ -2347,6 +2512,8 @@ statement:
 		$comb_if
 		$comb_for
 		$system
+		$block
+		$macro_call
 """)
 class ParseStatement:
 	def comb_create(stack, ast, delta):
@@ -2417,6 +2584,14 @@ class ParseIf:
 			i = stack.pop()
 			stack.last.set_iffalse(i)
 
+@parser("""
+block:
+	tree: @block_create
+		identifier: 'block'
+		listof: #optional
+			$statement: @block_add
+""")
+class ParseBlock:
 	def block_create(stack, ast, delta):
 		if delta > 0:
 			stack.push(Block(ast))
@@ -2529,13 +2704,11 @@ expr:
 		number: @number
 		string: @string
 		$system
+		$macro_call
 		unary: @unary
 			operator: @unary_set_op
 			$expr: @unary_set_op1
-		binary: @hier
-			operator: '.'
-			$expr: @hier_set_namespace
-			identifier: @hier_set_field
+		$hier
 		binary: @binary
 			operator: @binary_set_op
 			$expr: @binary_set_op1
@@ -2547,6 +2720,15 @@ expr:
 		$replicate
 		$expr_if
 		$expr_for
+
+hier:
+	binary: @hier
+		operator: '.'
+		$expr: @hier_set_namespace
+		identifier: @hier_set_field
+
+identifier:
+	identifier: @identifier
 """)
 class ParseExpr:
 	def identifier(stack, ast, delta):

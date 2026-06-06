@@ -1,0 +1,34 @@
+interface: APB:
+		AW = 32
+		DB = 4
+	port: Master / Slave
+		addr: net[AW]: out / in
+		sel: net: out / in
+		enable: net: out / in
+		write: net: out / in
+		ready: net: in / out
+		wdata: net[DB * 8]: out / in
+		rdata: net[DB * 8]: in / out
+		strb: net[DB]: out / in
+	macros:
+		activate = sel & enable
+		iswrite = @activate & write
+		isread = @activate & ~write
+
+		pre = block:
+			rdata = 0
+			ready = 0
+
+		post = block:
+			if: @activate & ~ready
+				ready = 1
+
+module: test
+	port:
+		clk: in
+		apb[2]: APB.Master
+		apb2[2]: APB.Slave
+
+	ff: +clk
+		@apb2[1].pre
+		@apb2[0].post
