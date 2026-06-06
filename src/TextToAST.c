@@ -420,12 +420,7 @@ static int l_push_token(enum LOP_ASTNodeType t)
 		 * 3. a - b() => (binary (operator -) (identifier a) (call '()' (identifier b)))
 		 * 3. a->b() => (call '()' (binary (operator ->) (identifier a) (identifier b)))
 		 */
-		/* :; list is checked too because we want:
-		 * 1. a: b => (call ':;' (id a) (id b))
-		 * 2. a + b: c => (call ':;' (binary (op +) (id a) (id b)) (id c))
-		 * 3. a * b + c * d: e => (call ':;' (binary (op +) (* a b) (* c d)) (id e))
-		 */
-		if (last_list->list.prio == 0 || t == LOP_TYPE_LIST_COLON) {
+		if (last_list->list.prio == 0) {
 			last_list = last_list->parent;
 			last_token = last_list->list.tail;
 			continue;
