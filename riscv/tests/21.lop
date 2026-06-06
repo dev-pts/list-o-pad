@@ -1,4 +1,4 @@
-test: module
+module: test
 	port:
 		a: out
 		b[2]: out

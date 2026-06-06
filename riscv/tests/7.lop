@@ -1,4 +1,4 @@
-test: module:
+module: test:
 		A = 1
 	port:
 		a: in

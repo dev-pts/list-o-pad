@@ -1,4 +1,4 @@
-test: module
+module: test
 	local:
 		a: DCM_SP(
 			CLKIN_PERIOD = 20.0
@@ -6,7 +6,7 @@ test: module
 			CLKFX_DIVIDE = 25
 		)
 
-DCM_SP: external:
+external: DCM_SP:
 		CLKIN_PERIOD = 0
 		CLKDV_DIVIDE = 1
 		CLKFX_MULTIPLY = 4

@@ -1,16 +1,16 @@
-Interface: interface:
+interface: Interface:
 		WIDTH = 3
 	port: Master / Slave
 		a: net: out / in
 		b: net[WIDTH]: in / out
 
-Interface2: interface:
+interface: Interface2:
 		WIDTH = 2
 	port: Master / Slave
 		c: net: out / in
 		d: Interface(WIDTH = WIDTH): Slave / Master
 
-SubModule: module:
+module: SubModule:
 		WIDTH = 4
 	port:
 		e: Interface2.Master
@@ -18,7 +18,7 @@ SubModule: module:
 		g[2]: Interface2.Master(WIDTH = WIDTH)
 		h[3]: Interface2.Slave(WIDTH = WIDTH)
 
-test: module
+module: test
 	port:
 		a: Interface2.Master(WIDTH = 10)
 		a2: Interface2.Master

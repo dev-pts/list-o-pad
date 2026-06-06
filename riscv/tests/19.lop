@@ -1,4 +1,4 @@
-test: module
+module: test
 	local:
 		a: SubModule
 		b: SubModule(Z = 2)
@@ -6,7 +6,7 @@ test: module
 
 	$bind(c.z, 1x0)
 
-SubModule: module:
+module: SubModule:
 		Z = 3
 	port:
 		y: out[Z]

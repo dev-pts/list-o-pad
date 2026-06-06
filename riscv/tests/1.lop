@@ -1,1 +1,3 @@
-test: module
+module: test
+external: ext
+interface: intf

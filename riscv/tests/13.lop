@@ -1,4 +1,4 @@
-test: module:
+module: test:
 		B = A * 8
 		A = 2
 	local:
@@ -10,7 +10,7 @@ test: module:
 
 	b[0].z = B
 
-SubModule: module
+module: SubModule
 	port:
 		p: inout
 		x: in

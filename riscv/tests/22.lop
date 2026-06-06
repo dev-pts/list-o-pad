@@ -1,8 +1,8 @@
-test: module
+module: test
 	local:
 		a: SubModule
 
-SubModule: module
+module: SubModule
 	port:
 		a: out
 		b[2]: out

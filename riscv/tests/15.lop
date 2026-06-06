@@ -1,11 +1,11 @@
-test: module:
+module: test:
 		B = A * 8
 		A = 2
 		B2 = 9
 	local:
 		b[2]: SubModule(Z = B2 + 1, B2 = 5)
 
-SubModule: module:
+module: SubModule:
 		Z = 3
 		B2 = 1
 	port:

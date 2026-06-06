@@ -1,9 +1,9 @@
-Interface: interface
+interface: Interface
 	port: Master / Slave
 		a: net: out / in
 		b: net[2]: in / out
 
-SubModule: module
+module: SubModule
 	port:
 		e: Interface.Master
 		f: Interface.Slave
@@ -12,7 +12,7 @@ SubModule: module
 		i: out
 		j[2]: out[3]
 
-test: module
+module: test
 	port:
 		a: Interface.Master
 		b: Interface.Slave

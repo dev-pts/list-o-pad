@@ -1,11 +1,13 @@
-test: module:
+module: test:
 		B = A * 8
 		A = 2
 	local:
 		b: SubModule
 		k: net[2]
 
-SubModule: module
+	k[0] = 2
+
+module: SubModule
 	port:
 		p: inout
 		x: in

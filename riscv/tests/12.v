@@ -23,5 +23,8 @@ module test();
 		.y(b__y)
 	);
 	reg [1:0] k;
+	always @(k[0]) begin
+		k[0] <= 2;
+	end
 endmodule
 

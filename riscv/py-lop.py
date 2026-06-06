@@ -268,7 +268,7 @@ class Interface:
 
 	def compile(self, _class, param=Scope()):
 		if _class not in self._class:
-			raise Exception()
+			raise Exception(f'"{_class}" not found')
 
 		ret = Interface(self.ast)
 
@@ -664,7 +664,8 @@ class Net:
 	def to_verilog_slice(self, name, dim=(None, None), count=(None, None)):
 		ret = name
 		for i in dim:
-			ret += f'[{i.to_verilog()}]'
+			if i:
+				ret += f'[{i.to_verilog()}]'
 		return ret
 
 @for_all_methods(wrap)
@@ -1934,15 +1935,15 @@ class Top:
 @parser("""
 external_def:
 	tree: @symbol_create
-		identifier: @symbol_set_name
+		identifier: 'external'
 		$external: @symbol_set_value
 
 external:
 	seqof:
-		oneof: @external_create
-			identifier: 'external'
+		oneof:
+			identifier: @symbol_set_name, @external_create
 			tree:
-				identifier: 'external'
+				identifier: @symbol_set_name, @external_create
 				listof:
 					binary: @external_add_param, @symbol_create
 						operator: '='
@@ -1955,7 +1956,7 @@ external:
 """)
 class ParseExternal:
 	def external_create(stack, ast, delta):
-		if delta > 0:
+		if delta >= 0:
 			stack.push(External())
 
 	def external_add_param(stack, ast, delta):
@@ -1971,21 +1972,21 @@ class ParseExternal:
 @parser("""
 interface_def:
 	tree: @symbol_create
-		identifier: @symbol_set_name
+		identifier: 'interface'
 		$interface: @symbol_set_value
 
 interface:
 	seqof:
-		oneof: @interface_create
-			identifier: 'interface'
+		oneof:
+			identifier: @symbol_set_name, @interface_create
 			tree:
-				identifier: 'interface'
+				identifier: @symbol_set_name, @interface_create
 				listof:
 					binary: @interface_add_param, @symbol_create
 						operator: '='
 						identifier: @symbol_set_name
 						$expr: @symbol_set_value
-		tree:
+		tree: #optional
 			identifier: 'port'
 			$interface_ports
 			listof: #optional
@@ -2020,7 +2021,7 @@ interface_port:
 """)
 class ParseInterface:
 	def interface_create(stack, ast, delta):
-		if delta > 0:
+		if delta >= 0:
 			stack.push(Interface(ast))
 
 	def interface_add_param(stack, ast, delta):
@@ -2090,15 +2091,15 @@ class ParseInterfaceInstance:
 @parser("""
 module_def:
 	tree: @symbol_create
-		identifier: @symbol_set_name
+		identifier: 'module'
 		$module: @symbol_set_value
 
 module:
 	seqof:
-		oneof: @module_create
-			identifier: 'module'
+		oneof:
+			identifier: @symbol_set_name, @module_create
 			tree:
-				identifier: 'module'
+				identifier: @symbol_set_name, @module_create
 				listof:
 					binary: @module_add_param, @symbol_create
 						operator: '='
@@ -2125,7 +2126,7 @@ module:
 """)
 class ParseModule:
 	def module_create(stack, ast, delta):
-		if delta > 0:
+		if delta >= 0:
 			stack.push(Module())
 
 	def module_add_param(stack, ast, delta):
@@ -2738,8 +2739,6 @@ for i in range(lop.hl.count):
 try:
 	top = SCOPE.lookup(topname).value
 	# 1. Constant folding & propagation & bound checking, for-loops unrolling
-	#param = Scope()
-	#param.add(Param.create('RESET_ADDR', Number(None, 3)))
 	top = top.compile()
 	# 2. Convert to verilog top and dependant modules
 	topv = top.to_verilog(topname)

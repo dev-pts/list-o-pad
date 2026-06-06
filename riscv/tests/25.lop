@@ -1,21 +1,21 @@
-Interface: interface
+interface: Interface
 	port: Master / Slave
 		a: net: out / in
 		b: net[2]: in / out
 
-Interface2: interface
+interface: Interface2
 	port: Master / Slave
 		c: net: out / in
 		d: Interface: Slave / Master
 
-SubModule: module
+module: SubModule
 	port:
 		e: Interface2.Master
 		f: Interface2.Slave
 		g[2]: Interface2.Master
 		h[3]: Interface2.Slave
 
-test: module
+module: test
 	port:
 		a: Interface2.Master
 		b: Interface2.Slave

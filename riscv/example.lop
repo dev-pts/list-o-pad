@@ -1,4 +1,4 @@
-CPU: module:
+module: CPU:
 		RESET_ADDR = 32x0000_0000
 		ADDR_WIDTH = 20
 	port:

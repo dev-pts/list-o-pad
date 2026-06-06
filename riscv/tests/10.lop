@@ -1,4 +1,4 @@
-test: module:
+module: test:
 		B = A * 8
 		A = 2
 	port:
@@ -25,7 +25,7 @@ test: module:
 	c = d.C
 	c = f[0].C
 
-SubModule: module
+module: SubModule
 	port:
 		p: inout
 		x: in
