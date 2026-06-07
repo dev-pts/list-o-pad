@@ -1,0 +1,50 @@
+interface: APB:
+		AW = 32
+		DB = 4
+	port: Master / Slave
+		addr: net[AW]: out / in
+		sel: net: out / in
+		enable: net: out / in
+		write: net: out / in
+		ready: net: in / out
+		wdata: net[DB * 8]: out / in
+		rdata: net[DB * 8]: in / out
+		strb: net[DB]: out / in
+	macros:
+		activate = sel & enable
+		iswrite = @activate & write
+		isread = @activate & ~write
+
+		pre = block:
+			rdata = 0
+			ready = 0
+
+		post = block:
+			if: @activate & ~ready
+				ready = 1
+
+		do(a, b, c) = block:
+			a = 1
+			b = c
+
+module: test
+	port:
+		clk: in
+		apb[2]: APB.Master
+		apb2[2]: APB.Slave
+	local:
+		some: net
+		some2: net[2]
+		some3[3]: net[2]
+
+	ff: +clk
+		@apb2[1].pre
+		@apb[0].do(some, some2, some3)
+		@apb[0].do(some2[0], some3[1], some)
+		for: i
+			@apb[0].do(some2[i], some3[1], some)
+		for: i
+			@apb[0].do(some2[0], some3[i], some)
+		for: i
+			@apb[0].do(some2[0], some3[0][i], some)
+		@apb2[0].post

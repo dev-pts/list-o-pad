@@ -247,38 +247,69 @@ class MacroCall:
 	def __init__(self, ast):
 		self.ast = ast
 		self.func = None
+		self.param = []
 
 	def set_func(self, arg):
 		self.func = arg
 
-	def compile(self):
-		return self.func.compile().resolve().expand(self.func.namespace)
+	def add_param(self, arg):
+		self.param.append(arg)
 
-	def add_scope(self):
-		self.func = self.func.add_scope()
+	def compile(self):
+		ret = self.func.compile().resolve().clone()
+		return ret.expand(self.func.namespace, self.param)
+
+	def clone(self):
+		ret = MacroCall(self.ast)
+		ret.set_func(self.func.clone())
+		for i in self.param:
+			ret.add_param(i.clone())
+		return ret
+
+	def add_scope(self, exc):
+		self.func = self.func.add_scope(exc)
 		return self
 
-	def set_scope(self, src):
-		self.func.set_scope(src)
+	def set_scope(self, src, sed):
+		self.func.set_scope(src, sed)
+		return self
 
 @for_all_methods(wrap)
 class Macro:
 	def __init__(self, ast):
 		self.ast = ast
 		self.func = None
+		self.param = {}
 
 	def set_func(self, arg):
 		self.func = arg
 
+	def add_param(self, arg):
+		self.param[arg.name] = None
+
 	def compile(self):
 		ret = Macro(self.ast)
-		ret.set_func(self.func.add_scope())
+		ret.set_func(self.func.add_scope(self.param))
+		for i in self.param:
+			ret.param[i] = None
 		return ret
 
-	def expand(self, src):
-		ret = self.func
-		ret.set_scope(src)
-		return ret.compile()
+	def clone(self):
+		ret = Macro(self.ast)
+		ret.set_func(self.func.clone())
+		for i in self.param:
+			ret.param[i] = None
+		return ret
+
+	def expand(self, src, param):
+		k = 0
+		for i in self.param:
+			self.param[i] = param[k]
+			k += 1
+
+		ret = self.func.set_scope(src, self.param)
+		ret = ret.compile()
+		return ret
 
 @for_all_methods(wrap)
 class Interface:
@@ -1017,8 +1048,18 @@ class Identifier:
 		ret.ref = ref
 		return ret
 
-	def add_scope(self):
+	def clone(self):
+		return Identifier(self.ast, self.name)
+
+	def add_scope(self, exc):
+		if self.name in exc:
+			return self
 		return Hier(self.ast).set_field(self)
+
+	def set_scope(self, src, sed):
+		if self.name in sed:
+			return sed[self.name]
+		raise Exception()
 
 	def dim(self):
 		return self.ref.dim()
@@ -1087,11 +1128,14 @@ class Number:
 	def compile(self):
 		return Number(self.ast, self.value)
 
-	def add_scope(self):
+	def clone(self):
+		return Number(self.ast, self.value)
+
+	def add_scope(self, exc):
 		return self
 
-	def set_scope(self, src):
-		pass
+	def set_scope(self, src, sed):
+		return self
 
 	def resolve(self):
 		return self
@@ -1220,12 +1264,18 @@ class Statement:
 		ret.set_comb(self.comb.compile())
 		return ret
 
-	def add_scope(self):
-		self.comb = self.comb.add_scope()
+	def clone(self):
+		ret = Statement(self.ast)
+		ret.set_comb(self.comb.clone())
+		return ret
+
+	def add_scope(self, exc):
+		self.comb = self.comb.add_scope(exc)
 		return self
 
-	def set_scope(self,src):
-		self.comb.set_scope(src)
+	def set_scope(self, src, sed):
+		self.comb = self.comb.set_scope(src, sed)
+		return self
 
 	def to_verilog(self):
 		return self.comb.to_verilog() + ';\n'
@@ -1248,14 +1298,21 @@ class Block:
 			ret.add(i.compile())
 		return ret
 
-	def add_scope(self):
+	def clone(self):
+		ret = Block(self.ast)
+		for i in self.body:
+			ret.add(i.clone())
+		return ret
+
+	def add_scope(self, exc):
 		for i in range(len(self.body)):
-			self.body[i] = self.body[i].add_scope()
+			self.body[i] = self.body[i].add_scope(exc)
 		return self
 
-	def set_scope(self, src):
-		for i in self.body:
-			i.set_scope(src)
+	def set_scope(self, src, sed):
+		for i in range(len(self.body)):
+			self.body[i] = self.body[i].set_scope(src, sed)
+		return self
 
 	def to_verilog(self):
 		ret = Formatter()
@@ -1400,14 +1457,21 @@ class Assign:
 		ret.set_rhs(self.rhs.compile())
 		return ret
 
-	def add_scope(self):
-		self.lhs = self.lhs.add_scope()
-		self.rhs = self.rhs.add_scope()
+	def clone(self):
+		ret = Assign(self.ast)
+		ret.set_lhs(self.lhs.clone())
+		ret.set_rhs(self.rhs.clone())
+		return ret
+
+	def add_scope(self, exc):
+		self.lhs = self.lhs.add_scope(exc)
+		self.rhs = self.rhs.add_scope(exc)
 		return self
 
-	def set_scope(self, src):
-		self.lhs.set_scope(src)
-		self.rhs.set_scope(src)
+	def set_scope(self, src, sed):
+		self.lhs = self.lhs.set_scope(src, sed)
+		self.rhs = self.rhs.set_scope(src, sed)
+		return self
 
 	def to_verilog(self):
 		return f'{self.lhs.to_verilog()} <= {self.rhs.to_verilog()}'
@@ -1492,6 +1556,9 @@ class Operator:
 	def compile(self):
 		return self
 
+	def clone(self):
+		return Operator(self.ast, self.value)
+
 	def to_verilog(self):
 		return self.value
 
@@ -1521,12 +1588,19 @@ class Unary:
 		ret.set_op1(op1)
 		return ret
 
-	def add_scope(self):
-		self.op1 = self.op1.add_scope()
+	def clone(self):
+		ret = Unary(self.ast)
+		ret.set_op(self.op.clone())
+		ret.set_op1(self.op1.clone())
+		return ret
+
+	def add_scope(self, exc):
+		self.op1 = self.op1.add_scope(exc)
 		return self
 
-	def set_scope(self,src):
-		self.op1.set_scope(src)
+	def set_scope(self, src, sed):
+		self.op1 = self.op1.set_scope(src, sed)
+		return self
 
 	def operator(self, op, op2):
 		return None
@@ -1566,11 +1640,19 @@ class Hier:
 		ret.ref = ret.namespace.resolve().resolve_hier(self.field)
 		return ret
 
-	def add_scope(self):
+	def clone(self):
+		ret = Hier(self.ast)
+		if self.namespace:
+			ret.set_namespace(self.namespace.clone())
+		ret.set_field(self.field.clone())
+		return ret
+
+	def add_scope(self, exc):
 		return self
 
-	def set_scope(self, src):
+	def set_scope(self, src, sed):
 		self.set_namespace(src)
+		return self
 
 	def resolve(self):
 		return self.ref
@@ -1628,14 +1710,22 @@ class Binary:
 		ret.set_op2(op2)
 		return ret
 
-	def add_scope(self):
-		self.op1 = self.op1.add_scope()
-		self.op2 = self.op2.add_scope()
+	def clone(self):
+		ret = Binary(self.ast)
+		ret.set_op(self.op.clone())
+		ret.set_op1(self.op1.clone())
+		ret.set_op2(self.op2.clone())
+		return ret
+
+	def add_scope(self, exc):
+		self.op1 = self.op1.add_scope(exc)
+		self.op2 = self.op2.add_scope(exc)
 		return self
 
-	def set_scope(self, src):
-		self.op1.set_scope(src)
-		self.op2.set_scope(src)
+	def set_scope(self, src, sed):
+		self.op1 = self.op1.set_scope(src, sed)
+		self.op2 = self.op2.set_scope(src, sed)
+		return self
 
 	def operator(self, op, op2):
 		return None
@@ -1718,18 +1808,27 @@ class If:
 			ret.set_iffalse(self.iffalse.compile())
 		return ret
 
-	def add_scope(self):
-		self.cond = self.cond.add_scope()
-		self.iftrue = self.iftrue.add_scope()
+	def clone(self):
+		ret = If(self.ast, self.inline)
+		ret.set_cond(self.cond.clone())
+		ret.set_iftrue(self.iftrue.clone())
 		if self.iffalse:
-			self.iffalse = self.iffalse.add_scope()
+			ret.set_iffalse(self.iffalse.clone())
+		return ret
+
+	def add_scope(self, exc):
+		self.cond = self.cond.add_scope(exc)
+		self.iftrue = self.iftrue.add_scope(exc)
+		if self.iffalse:
+			self.iffalse = self.iffalse.add_scope(exc)
 		return self
 
-	def set_scope(self, src):
-		self.cond.set_scope(src)
-		self.iftrue.set_scope(src)
+	def set_scope(self, src, sed):
+		self.cond = self.cond.set_scope(src, sed)
+		self.iftrue = self.iftrue.set_scope(src, sed)
 		if self.iffalse:
-			self.iffalse.set_scope(src)
+			self.iffalse = self.iffalse.set_scope(src, sed)
+		return self
 
 	def operator(self, op, op2):
 		return None
@@ -2145,12 +2244,12 @@ macro:
 	binary: @symbol_create
 		operator: '='
 		oneof:
-			identifier: @symbol_set_name
+			identifier: @symbol_set_name, @macro_create
 			call:
-				identifier: @symbol_set_name
+				identifier: @symbol_set_name, @macro_create
 				listof: #optional
-					identifier
-		oneof: @symbol_set_value, @macro_create
+					$identifier: @macro_add_param
+		oneof: @symbol_set_value
 			$expr: @macro_set_func
 			$block: @macro_set_func
 
@@ -2160,6 +2259,12 @@ macro_call:
 		oneof:
 			$hier: @macro_call_set
 			$identifier: @macro_call_set
+			call:
+				oneof:
+					$hier: @macro_call_set
+					$identifier: @macro_call_set
+				listof: #optional
+					$expr: @macro_call_add_param
 """)
 class ParseInterface:
 	def interface_create(stack, ast, delta):
@@ -2210,6 +2315,11 @@ class ParseInterface:
 			i = stack.pop()
 			stack.last.set_func(i)
 
+	def macro_add_param(stack, ast, delta):
+		if delta < 0:
+			i = stack.pop()
+			stack.last.add_param(i)
+
 	def macro_call_create(stack, ast, delta):
 		if delta >= 0:
 			stack.push(MacroCall(ast))
@@ -2218,6 +2328,11 @@ class ParseInterface:
 		if delta < 0:
 			i = stack.pop()
 			stack.last.set_func(i)
+
+	def macro_call_add_param(stack, ast, delta):
+		if delta < 0:
+			i = stack.pop()
+			stack.last.add_param(i)
 
 @parser("""
 interface_port_decl:
