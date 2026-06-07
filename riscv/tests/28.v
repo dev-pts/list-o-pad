@@ -40,7 +40,7 @@ module test(
 		apb2_1__rdata <= 0;
 		apb2_1__ready <= 0;
 		some <= 1;
-		some2 <= some3;
+		some2 <= some3[0];
 		some2[0] <= 1;
 		some3[1] <= some;
 		some2[0] <= 1;

@@ -12,6 +12,6 @@ module: test
 	a.a = a.b[0]
 
 	for: i
-		b.a = c[0].b[i]
+		b.b = c[0].b[i]
 	for: i
-		b.a = c[i].b[0]
+		b.b = c[i].b[0]

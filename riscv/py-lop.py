@@ -608,12 +608,15 @@ class Port:
 
 	def set_binding(self, arg):
 		self.binding = arg
-		arg.resolve().binded = True
+		arg.resolve().set_binded()
 
 	def compile(self):
 		ret = Port(self.ast)
 		ret.set_dir(self.dir)
 		return ret
+
+	def set_binded(self):
+		pass
 
 	def dim(self):
 		return ()
@@ -713,6 +716,9 @@ class Net:
 			ret.set_value(self.value.compile())
 		return ret
 
+	def set_binded(self):
+		self.binded = True
+
 	def dim(self):
 		return ()
 
@@ -796,6 +802,7 @@ class Array:
 		self.ast = ast
 		self.shape = (None, None)
 		self.value = None
+		self.binded = False
 
 	def set_count(self, arg):
 		self.shape = (arg, self.shape[1])
@@ -814,6 +821,9 @@ class Array:
 			ret.set_width(self.shape[1].compile())
 		ret.set_value(self.value.compile())
 		return ret
+
+	def set_binded(self):
+		self.value.set_binded()
 
 	def operator(self, op, op2):
 		return None
@@ -1127,6 +1137,9 @@ class Number:
 
 	def compile(self):
 		return Number(self.ast, self.value)
+
+	def set_binded(self):
+		pass
 
 	def clone(self):
 		return Number(self.ast, self.value)

@@ -32,7 +32,7 @@ module test();
 		.z(b_1__z),
 		.y(b_1__y)
 	);
-	reg [1:0] k [2:0];
+	wire [1:0] k [2:0];
 	always @(b_0__z) begin
 		b_0__z <= 16;
 	end
