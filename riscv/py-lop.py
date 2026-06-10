@@ -2258,6 +2258,15 @@ class Regs:
 	def to_verilog_hier(self, namespace, field):
 		return f'{namespace.to_verilog()}__{field.name}'
 
+@for_all_methods(wrap)
+class Resolver:
+	def __init__(self, ast, identifier):
+		self.ast = ast
+		self.identifier = identifier
+
+	def compile(self):
+		return self.identifier.compile().ref
+
 SYNTAX = []
 PARSER = []
 
@@ -2315,6 +2324,7 @@ top:
 			$module_def: @top_add
 			$external_def: @top_add
 			$interface_def: @top_add
+			$regs_def: @top_add
 """)
 class Top:
 	def top_add(stack, ast, delta):
@@ -2359,6 +2369,9 @@ class Top:
 		if delta < 0:
 			i = stack.pop()
 			stack.last.set_value(i)
+
+	def resolver_create(stack, ast, delta):
+		stack.push(Resolver(ast, Identifier(ast, LOP.LOP_symbol_value(ast).decode())))
 
 @parser("""
 external_def:
@@ -2607,10 +2620,15 @@ module:
 			identifier: 'port'
 			listof: #optional
 				$port: @module_add_port
-		tree: #optional
-			identifier: 'local'
-			listof: #optional
-				$local: @module_add_local
+		listof: #optional
+			tree:
+				identifier: 'local'
+				listof: #optional
+					$local: @module_add_local
+			tree:
+				identifier: 'regs'
+				listof: #optional
+					$regs_decl: @module_add_local
 		listof: #optional
 			$statement: @module_add_comb
 			$sync: @module_add_sync
@@ -2702,7 +2720,6 @@ local:
 				$net_with_value: @net_create, @array_set_value
 				$fsm: @array_set_value
 				$instance: @array_set_value
-				$regs: @array_set_value
 		tree: @symbol_set_value
 			aref:
 				identifier: @symbol_set_name
@@ -2789,11 +2806,14 @@ class ParseFSM:
 		stack.last.add_state(LOP.LOP_symbol_value(ast).decode())
 
 @parser("""
+regs_def:
+	tree: @symbol_create
+		identifier: 'registers'
+		$regs: @symbol_set_value
+
 regs:
-	seqof: @regs_create
-		unary:
-			operator: '$'
-			identifier: 'Registers'
+	seqof:
+		identifier: @symbol_set_name, @regs_create
 		listof: #optional
 			tree: @reg_create, @regs_add_reg
 				identifier: @reg_set_name
@@ -2824,10 +2844,25 @@ regperms:
 		identifier: 'RW'
 		identifier: 'RS'
 		identifier: 'RCS'
+
+regs_decl:
+	oneof: @symbol_create
+		tree: @symbol_set_value
+			identifier: @symbol_set_name
+			oneof: @array_create
+				oneof: @array_set_value
+					identifier: @resolver_create
+		tree: @symbol_set_value
+			aref:
+				identifier: @symbol_set_name
+				$expr: @array_create, @array_set_count
+			oneof:
+				oneof: @array_set_value
+					identifier: @resolver_create
 """)
 class ParseRegs:
 	def regs_create(stack, ast, delta):
-		if delta > 0:
+		if delta >= 0:
 			stack.push(Regs(ast))
 
 	def regs_add_reg(stack, ast, delta):
