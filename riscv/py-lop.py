@@ -1017,6 +1017,39 @@ system['goto'] = sh_goto
 system['bind'] = sh_bind
 system['connect'] = sh_connect
 
+def sh_regaddr(ast, args):
+	return args[0].resolve().get_addr()
+
+def sh_regsize(ast, args):
+	return args[0].resolve().get_size()
+
+def sh_regrmask(ast, args):
+	return args[0].resolve().get_mask('R')
+
+def sh_regwmask(ast, args):
+	return args[0].resolve().get_mask('W')
+
+def sh_regsmask(ast, args):
+	return args[0].resolve().get_mask('S')
+
+def sh_regcrmask(ast, args):
+	return args[0].resolve().get_mask('CR')
+
+def sh_regcsmask(ast, args):
+	return args[0].resolve().get_mask('CS')
+
+def sh_regcast(ast, args):
+	return args[0].resolve().to_reg(args[0])
+
+system['regaddr'] = sh_regaddr
+system['regsize'] = sh_regsize
+system['regrmask'] = sh_regrmask
+system['regwmask'] = sh_regwmask
+system['regsmask'] = sh_regsmask
+system['regcrmask'] = sh_regcrmask
+system['regcsmask'] = sh_regcsmask
+system['regcast'] = sh_regcast
+
 class Empty:
 	def get_sens(self):
 		return {}
@@ -1261,6 +1294,9 @@ class String:
 
 	def to_verilog(self):
 		return f'"{self.value}"'
+
+	def get_sens(self):
+		return {}
 
 @for_all_methods(wrap)
 class Statement:
@@ -2060,6 +2096,168 @@ class Instance:
 			ret += f'_{dim[0].to_verilog()}'
 		return ret
 
+@for_all_methods(wrap)
+class Field:
+	def __init__(self, ast):
+		self.ast = ast
+		self.name = None
+		self.hi = None
+		self.lo = None
+		self.perm = None
+
+	def set_name(self, arg):
+		self.name = arg
+
+	def set_hi(self, arg):
+		self.hi = arg
+
+	def set_lo(self, arg):
+		self.lo = arg
+
+	def set_perm(self, arg):
+		self.perm = arg
+
+	def _get_size(self):
+		return self.hi.to_int() - self.lo.to_int() + 1
+
+	def _get_mask(self):
+		return ((1 << self._get_size()) - 1) << self.lo.to_int()
+
+	def get_mask(self, mask):
+		if mask in self.perm:
+			return Number(self.ast, self._get_mask()).compile()
+
+		return Number(self.ast, 0).compile()
+
+	def to_reg(self, src):
+		ret = Slice(src.ast)
+		ret.set_value(src.namespace)
+		ret.set_hilo(self.hi)
+		return ret.compile()
+
+	def slice(self, hi, lo):
+		return None
+
+	def dim(self):
+		return (Number(self.ast, self._get_size()),)
+
+	def to_verilog_hier_def(self, namespace, field):
+		ret = 'wire '
+		if self._get_size() > 1:
+			ret += f'[{self._get_size() - 1}:0] '
+		ret += f'{namespace}__{field}'
+		ret += f' = {namespace}['
+
+		hi = self.hi.to_verilog()
+		lo = self.lo.to_verilog()
+
+		if hi == lo:
+			ret += hi
+		else:
+			ret += f'{hi}:{lo}'
+
+		ret += '];\n'
+		return ret
+
+	def to_verilog_slice(self, name, dim):
+		return f'{name}[{dim[0].to_verilog()}]'
+
+@for_all_methods(wrap)
+class Reg:
+	def __init__(self, ast):
+		self.ast = ast
+		self.name = None
+		self.hi = None
+		self.lo = None
+		self.scope = Scope()
+		self.perm = None
+
+	def set_name(self, arg):
+		self.name = arg
+
+	def set_hi(self, arg):
+		self.hi = arg
+
+	def set_lo(self, arg):
+		self.lo = arg
+
+	def set_perm(self, arg):
+		self.perm = arg
+
+	def add_field(self, arg):
+		self.scope.add(arg)
+
+	def get_addr(self):
+		return self.lo
+
+	def _get_bytes(self):
+		return self.hi.to_int() - self.lo.to_int() + 1
+
+	def _get_mask(self):
+		return (1 << (self.hi.to_int() - self.lo.to_int() + 1) * 8) - 1
+
+	def get_size(self):
+		return Number(self.ast, self._get_bytes()).compile()
+
+	def get_mask(self, mask):
+		if self.perm:
+			if mask in self.perm:
+				return Number(self.ast, self._get_mask()).compile()
+			return Number(self.ast, 0).compile()
+
+		ret = 0
+		for i in self.scope.scope:
+			ret |= self.scope.lookup(i).get_mask(mask).to_int()
+		return Number(self.ast, ret).compile()
+
+	def resolve_hier(self, field):
+		return self.scope.lookup(field.name)
+
+	def slice(self, hi, lo):
+		return None
+
+	def dim(self):
+		return (Number(self.ast, self._get_bytes() * 8),)
+
+	def to_verilog(self, name):
+		ret = 'reg '
+		ret += f'[{self._get_bytes() * 8 - 1}:0] '
+		ret += name
+		ret += ';\n'
+		for i in self.scope.scope:
+			ret += self.scope.lookup(i).to_verilog_hier_def(name, i)
+		return ret
+
+	def to_verilog_hier(self, namespace, field):
+		return f'{namespace.to_verilog()}__{field.name}'
+
+	def to_verilog_slice(self, name, dim):
+		return f'{name}[{dim[0].to_verilog()}]'
+
+@for_all_methods(wrap)
+class Regs:
+	def __init__(self, ast):
+		self.ast = ast
+		self.scope = Scope()
+
+	def add_reg(self, arg):
+		self.scope.add(arg)
+
+	def compile(self):
+		return self
+
+	def resolve_hier(self, field):
+		return self.scope.lookup(field.name)
+
+	def to_verilog(self, name, shape):
+		ret = Formatter()
+		for i in self.scope.scope:
+			ret += self.scope.lookup(i).to_verilog(f'{name}__{i}')
+		return ret
+
+	def to_verilog_hier(self, namespace, field):
+		return f'{namespace.to_verilog()}__{field.name}'
+
 SYNTAX = []
 PARSER = []
 
@@ -2504,6 +2702,7 @@ local:
 				$net_with_value: @net_create, @array_set_value
 				$fsm: @array_set_value
 				$instance: @array_set_value
+				$regs: @array_set_value
 		tree: @symbol_set_value
 			aref:
 				identifier: @symbol_set_name
@@ -2588,6 +2787,93 @@ class ParseFSM:
 
 	def fsm_add_state(stack, ast, delta):
 		stack.last.add_state(LOP.LOP_symbol_value(ast).decode())
+
+@parser("""
+regs:
+	seqof: @regs_create
+		unary:
+			operator: '$'
+			identifier: 'Registers'
+		listof: #optional
+			tree: @reg_create, @regs_add_reg
+				identifier: @reg_set_name
+				$num_or_range
+				oneof:
+					$regperms: @reg_set_perm
+					listof:
+						tree: @field_create, @reg_add_field
+							identifier: @field_set_name
+							$num_or_range
+							$regperms: @field_set_perm
+
+num_or_range:
+	oneof:
+		number: @number, @loc_set_hilo
+		binary:
+			operator: '..'
+			number: @number, @loc_set_hi
+			number: @number, @loc_set_lo
+
+regperms:
+	oneof:
+		identifier: 'R'
+		identifier: 'CR'
+		identifier: 'W'
+		identifier: 'S'
+		identifier: 'CS'
+		identifier: 'RW'
+		identifier: 'RS'
+		identifier: 'RCS'
+""")
+class ParseRegs:
+	def regs_create(stack, ast, delta):
+		if delta > 0:
+			stack.push(Regs(ast))
+
+	def regs_add_reg(stack, ast, delta):
+		if delta < 0:
+			i = stack.pop()
+			stack.last.add_reg(i)
+
+	def reg_create(stack, ast, delta):
+		if delta > 0:
+			stack.push(Reg(ast))
+
+	def reg_set_name(stack, ast, delta):
+		stack.last.set_name(LOP.LOP_symbol_value(ast).decode())
+
+	def reg_set_perm(stack, ast, delta):
+		if delta > 0:
+			stack.last.set_perm(LOP.LOP_symbol_value(ast).decode())
+
+	def reg_add_field(stack, ast, delta):
+		if delta < 0:
+			i = stack.pop()
+			stack.last.add_field(i)
+
+	def field_create(stack, ast, delta):
+		if delta > 0:
+			stack.push(Field(ast))
+
+	def field_set_name(stack, ast, delta):
+		stack.last.set_name(LOP.LOP_symbol_value(ast).decode())
+
+	def field_set_perm(stack, ast, delta):
+		if delta > 0:
+			stack.last.set_perm(LOP.LOP_symbol_value(ast).decode())
+
+	def loc_set_hilo(stack, ast, delta):
+		hilo = stack.pop()
+		stack.last.set_hi(hilo)
+		stack.last.set_lo(hilo)
+
+	def loc_set_hi(stack, ast, delta):
+		arg = stack.pop()
+		stack.last.set_hi(arg)
+
+	def loc_set_lo(stack, ast, delta):
+		arg = stack.pop()
+		stack.last.set_lo(arg)
 
 @parser("""
 sync:
