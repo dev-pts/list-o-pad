@@ -1028,10 +1028,18 @@ def sh_connect(ast, args):
 
 	return ret.compile()
 
+def sh_number(ast, args):
+	ret = Number(ast, args[0].to_int())
+	ret.width = args[1].to_int()
+	ret.base = args[2].value
+	ret.set_ibase()
+	return ret
+
 system['z'] = sh_z
 system['goto'] = sh_goto
 system['bind'] = sh_bind
 system['connect'] = sh_connect
+system['number'] = sh_number
 
 def sh_regaddr(ast, args):
 	return args[0].resolve().get_addr()
@@ -1230,7 +1238,9 @@ class Number:
 		self.width, self.base, self.svalue = re.findall(r'([0-9][_0-9]*)(.)([0-9a-f_]+)', self.value, re.IGNORECASE)[0]
 
 		self.width = int(self.width)
+		self.set_ibase()
 
+	def set_ibase(self):
 		if self.base == 'b':
 			self.ibase = 2
 		elif self.base == 'o':
@@ -1328,7 +1338,7 @@ class Number:
 		raise Exception(f'Unknown "{op}"')
 
 	def to_verilog(self):
-		if type(self.value) in [int, float]:
+		if type(self.value) in [int, float] and not self.ibase:
 			return str(self.value)
 
 		ret = ''
@@ -3087,10 +3097,9 @@ elif:
 expr_if:
 	call: @if_create_inline
 		identifier: 'mux'
-		tree:
-			$expr: @if_set_cond
-			$expr: @if_set_iftrue
-			$expr: @if_set_iffalse
+		$expr: @if_set_cond
+		$expr: @if_set_iftrue
+		$expr: @if_set_iffalse
 """)
 class ParseIf:
 	def if_create(stack, ast, delta):
@@ -3167,10 +3176,9 @@ comb_for:
 expr_for:
 	call: @for_inline_create
 		identifier: 'for'
-		tree:
-			$expr: @for_set_it
-			listof:
-				$expr: @for_add
+		$expr: @for_set_it
+		listof:
+			$expr: @for_add
 """)
 class ParseFor:
 	def for_create(stack, ast, delta):

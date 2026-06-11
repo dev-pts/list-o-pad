@@ -1,0 +1,4 @@
+module: test
+	local:
+		a: net = for(i < 8, $number(i, 3, 'd'))
+		b: net = mux(1 < 2, 3, 4)
