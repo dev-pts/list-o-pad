@@ -1809,9 +1809,11 @@ class Range:
 
 	def set_hi(self, i):
 		self.hi = i
+		return self
 
 	def set_lo(self, i):
 		self.lo = i
+		return self
 
 	def compile(self):
 		ret = Range(self.ast)
@@ -2132,7 +2134,10 @@ class Field:
 	def to_reg(self, src):
 		ret = Slice(src.ast)
 		ret.set_value(src.namespace)
-		ret.set_hilo(self.hi)
+		if self._get_size() == 1:
+			ret.set_hilo(self.hi)
+		else:
+			ret.set_hilo(Range(src.ast).set_hi(self.hi).set_lo(self.lo))
 		return ret.compile()
 
 	def slice(self, hi, lo):
@@ -2218,6 +2223,9 @@ class Reg:
 
 	def dim(self):
 		return (Number(self.ast, self._get_bytes() * 8),)
+
+	def operator(self, op, op2):
+		return None
 
 	def to_verilog(self, name):
 		ret = 'reg '

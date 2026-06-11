@@ -1,0 +1,140 @@
+registers: test_regs
+	a_r: 0x0, R
+	a_cr: 0x1, CR
+	a_w: 0x2, W
+	a_s: 0x3, S
+	a_cs: 0x4, CS
+	a_rw: 0x5, RW
+	a_rs: 0x6, RS
+	a_rcs: 0x7, RCS
+
+	b: 0xf .. 0x8, R
+
+	c: 0x10
+		rcs: 7, RCS
+		rs: 6, RS
+		rw: 5, RW
+		cs: 4, CS
+		s: 3, S
+		w: 2, W
+		cr: 1, CR
+		r: 0, R
+
+	d: 0x1f .. 0x18
+		rcs: 63 .. 56, RCS
+		rs: 55 .. 48, RS
+		rw: 47 .. 40, RW
+		cs: 39 .. 32, CS
+		s: 31 .. 24, S
+		w: 23 .. 16, W
+		cr: 15 .. 8, CR
+		r: 7 .. 0, R
+
+module: test
+	local:
+		dummy: net
+	regs:
+		regs: test_regs
+
+	dummy = $regaddr(regs.a_r)
+	dummy = $regsize(regs.a_r) * 8
+	dummy = $regrmask(regs.a_r)
+	dummy = $regwmask(regs.a_r)
+	dummy = $regsmask(regs.a_r)
+	dummy = $regcrmask(regs.a_r)
+	dummy = $regcsmask(regs.a_r)
+
+	dummy = $regaddr(regs.a_cr)
+	dummy = $regsize(regs.a_cr) * 8
+	dummy = $regrmask(regs.a_cr)
+	dummy = $regwmask(regs.a_cr)
+	dummy = $regsmask(regs.a_cr)
+	dummy = $regcrmask(regs.a_cr)
+	dummy = $regcsmask(regs.a_cr)
+
+	dummy = $regaddr(regs.a_w)
+	dummy = $regsize(regs.a_w) * 8
+	dummy = $regrmask(regs.a_w)
+	dummy = $regwmask(regs.a_w)
+	dummy = $regsmask(regs.a_w)
+	dummy = $regcrmask(regs.a_w)
+	dummy = $regcsmask(regs.a_w)
+
+	dummy = $regaddr(regs.a_s)
+	dummy = $regsize(regs.a_s) * 8
+	dummy = $regrmask(regs.a_s)
+	dummy = $regwmask(regs.a_s)
+	dummy = $regsmask(regs.a_s)
+	dummy = $regcrmask(regs.a_s)
+	dummy = $regcsmask(regs.a_s)
+
+	dummy = $regaddr(regs.a_cs)
+	dummy = $regsize(regs.a_cs) * 8
+	dummy = $regrmask(regs.a_cs)
+	dummy = $regwmask(regs.a_cs)
+	dummy = $regsmask(regs.a_cs)
+	dummy = $regcrmask(regs.a_cs)
+	dummy = $regcsmask(regs.a_cs)
+
+	dummy = $regaddr(regs.a_rw)
+	dummy = $regsize(regs.a_rw) * 8
+	dummy = $regrmask(regs.a_rw)
+	dummy = $regwmask(regs.a_rw)
+	dummy = $regsmask(regs.a_rw)
+	dummy = $regcrmask(regs.a_rw)
+	dummy = $regcsmask(regs.a_rw)
+
+	dummy = $regaddr(regs.a_rs)
+	dummy = $regsize(regs.a_rs) * 8
+	dummy = $regrmask(regs.a_rs)
+	dummy = $regwmask(regs.a_rs)
+	dummy = $regsmask(regs.a_rs)
+	dummy = $regcrmask(regs.a_rs)
+	dummy = $regcsmask(regs.a_rs)
+
+	dummy = $regaddr(regs.a_rcs)
+	dummy = $regsize(regs.a_rcs) * 8
+	dummy = $regrmask(regs.a_rcs)
+	dummy = $regwmask(regs.a_rcs)
+	dummy = $regsmask(regs.a_rcs)
+	dummy = $regcrmask(regs.a_rcs)
+	dummy = $regcsmask(regs.a_rcs)
+
+	dummy = $regaddr(regs.b)
+	dummy = $regsize(regs.b) * 8
+	dummy = $regrmask(regs.b)
+	dummy = $regwmask(regs.b)
+	dummy = $regsmask(regs.b)
+	dummy = $regcrmask(regs.b)
+	dummy = $regcsmask(regs.b)
+
+	dummy = $regaddr(regs.c)
+	dummy = $regsize(regs.c) * 8
+	dummy = $regrmask(regs.c)
+	dummy = $regwmask(regs.c)
+	dummy = $regsmask(regs.c)
+	dummy = $regcrmask(regs.c)
+	dummy = $regcsmask(regs.c)
+
+	dummy = $regaddr(regs.d)
+	dummy = $regsize(regs.d) * 8
+	dummy = $regrmask(regs.d)
+	dummy = $regwmask(regs.d)
+	dummy = $regsmask(regs.d)
+	dummy = $regcrmask(regs.d)
+	dummy = $regcsmask(regs.d)
+
+	for: i
+		dummy = regs.a_r[i]
+	for: i
+		dummy = regs.b[i]
+	for: i
+		dummy = regs.c[i]
+	for: i
+		dummy = regs.d[i]
+
+	dummy = regs.c.rcs | regs.c.rs | regs.c.rw | regs.c.cs | regs.c.s | regs.c.w | regs.c.cr | regs.c.r
+	dummy = regs.d.rcs | regs.d.rs | regs.d.rw | regs.d.cs | regs.d.s | regs.d.w | regs.d.cr | regs.d.r
+
+	dummy = $regcast(regs.c.rcs) | $regcast(regs.c.rs) | $regcast(regs.c.rw) | $regcast(regs.c.cs) | $regcast(regs.c.s) | $regcast(regs.c.w) | $regcast(regs.c.cr) | $regcast(regs.c.r)
+	dummy = $regcast(regs.d.rcs) | $regcast(regs.d.rs) | $regcast(regs.d.rw) | $regcast(regs.d.cs) | $regcast(regs.d.s) | $regcast(regs.d.w) | $regcast(regs.d.cr) | $regcast(regs.d.r)
