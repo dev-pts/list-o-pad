@@ -785,11 +785,9 @@ class FSM:
 		return (Number(self.ast, len(self.state)),)
 
 	def goto(self, src):
-		ret = Statement(src.ast)
-		ass = Assign(src.ast)
-		ass.set_lhs(src.namespace)
-		ass.set_rhs(Number(src.ast, 1 << self.state[src.field.name]))
-		ret.set_comb(ass)
+		ret = Assign(src.ast)
+		ret.set_lhs(src.namespace)
+		ret.set_rhs(Number(src.ast, 1 << self.state[src.field.name]))
 		return ret.compile()
 
 	def resolve_hier(self, field):
@@ -1010,20 +1008,16 @@ def sh_connect(ast, args):
 
 	for i in range(len(a_lhs)):
 		ret.add(
-			Statement(ast).set_comb(
-				Assign(ast)
-					.set_lhs(a_lhs[i])
-					.set_rhs(b_rhs[i])
-			)
+			Assign(ast)
+				.set_lhs(a_lhs[i])
+				.set_rhs(b_rhs[i])
 		)
 
 	for i in range(len(b_lhs)):
 		ret.add(
-			Statement(ast).set_comb(
-				Assign(ast)
-					.set_lhs(b_lhs[i])
-					.set_rhs(a_rhs[i])
-			)
+			Assign(ast)
+				.set_lhs(b_lhs[i])
+				.set_rhs(a_rhs[i])
 		)
 
 	return ret.compile()
@@ -1381,40 +1375,6 @@ class String:
 
 	def get_sens(self):
 		return {}
-
-@for_all_methods(wrap)
-class Statement:
-	def __init__(self, ast):
-		self.ast = ast
-		self.comb = None
-
-	def set_comb(self, i):
-		self.comb = i
-		return self
-
-	def compile(self):
-		ret = Statement(self.ast)
-		ret.set_comb(self.comb.compile())
-		return ret
-
-	def clone(self):
-		ret = Statement(self.ast)
-		ret.set_comb(self.comb.clone())
-		return ret
-
-	def add_scope(self, exc):
-		self.comb = self.comb.add_scope(exc)
-		return self
-
-	def set_scope(self, src, sed):
-		self.comb = self.comb.set_scope(src, sed)
-		return self
-
-	def to_verilog(self):
-		return self.comb.to_verilog() + ';\n'
-
-	def get_sens(self):
-		return self.comb.get_sens()
 
 @for_all_methods(wrap)
 class Block:
