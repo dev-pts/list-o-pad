@@ -29,7 +29,9 @@ module test(
 	reg [2:0] f [1:0];
 	always @(d, f[0], b__z, c, d[2], f[0][2]) begin
 		d <= 4;
+		;
 		f[0] <= 2;
+		;
 		b__z <= 16;
 		c <= d[2];
 		c <= f[0][2];

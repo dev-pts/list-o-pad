@@ -1,0 +1,14 @@
+module: test:
+		INIT_FILE = "mem.hex"
+	local:
+		mem[256]: net[8]
+		dummy: net
+		dummy2: net
+	initial:
+		if: INIT_FILE != 'mem.hex2'
+			$readmemh(INIT_FILE, mem)
+
+	dummy = $signed(dummy2)
+
+	ff: +dummy, -dummy
+		dummy = $signed(dummy) + 3

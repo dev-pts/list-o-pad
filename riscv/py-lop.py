@@ -491,6 +491,8 @@ class Module:
 		self.comb = []
 		self.sync = []
 
+		self.initial = []
+
 	def add_param(self, arg):
 		self.param.append(arg)
 		self.scope.add(arg)
@@ -506,6 +508,9 @@ class Module:
 	def add_local(self, arg):
 		self.local.append(arg)
 		self.scope.add(arg)
+
+	def add_initial(self, arg):
+		self.initial.append(arg)
 
 	def add_comb(self, arg):
 		self.comb.append(arg)
@@ -540,6 +545,9 @@ class Module:
 		for i in ret.local:
 			i.compile_value()
 
+		for i in self.initial:
+			ret.add_initial(i.compile())
+
 		for i in self.comb:
 			ret.add_comb(i.compile())
 		for i in self.sync:
@@ -571,6 +579,14 @@ class Module:
 
 		for i in self.local:
 			ret += i.value.to_verilog(i.name)
+
+		if self.initial:
+			ret += 'initial begin\n'
+			ret.tab()
+			for i in self.initial:
+				ret += i.to_verilog()
+			ret.untab()
+			ret += 'end\n'
 
 		sens = {}
 		for i in self.comb:
@@ -1050,6 +1066,64 @@ system['regcrmask'] = sh_regcrmask
 system['regcsmask'] = sh_regcsmask
 system['regcast'] = sh_regcast
 
+@for_all_methods(wrap)
+class LiteralString:
+	def __init__(self, ast):
+		self.ast = ast
+		self.value = []
+
+	def add(self, arg):
+		self.value.append(arg)
+
+	def compile(self):
+		ret = LiteralString(self.ast)
+		for i in self.value:
+			if type(i) == str:
+				ret.add(i)
+			else:
+				ret.add(i.compile())
+		return ret
+
+	def get_sens(self):
+		ret = {}
+		for i in self.value:
+			if type(i) == str:
+				continue
+			ret.update(i.get_sens())
+		return ret
+
+	def operator(self, op, op2):
+		return None
+
+	def to_verilog(self):
+		ret = ''
+		for i in self.value:
+			if type(i) == str:
+				ret += i
+			else:
+				ret += i.to_verilog()
+
+		return ret
+
+def sh_readmemh(ast, args):
+	ret = LiteralString(ast)
+	ret.add('$readmemh(')
+	ret.add(args[0])
+	ret.add(', ')
+	ret.add(args[1])
+	ret.add(');\n')
+	return ret.compile()
+
+def sh_signed(ast, args):
+	ret = LiteralString(ast)
+	ret.add('$signed(')
+	ret.add(args[0])
+	ret.add(')')
+	return ret.compile()
+
+system['readmemh'] = sh_readmemh
+system['signed'] = sh_signed
+
 class Empty:
 	def get_sens(self):
 		return {}
@@ -1523,7 +1597,7 @@ class Assign:
 		return self
 
 	def to_verilog(self):
-		return f'{self.lhs.to_verilog()} <= {self.rhs.to_verilog()}'
+		return f'{self.lhs.to_verilog()} <= {self.rhs.to_verilog()};\n'
 
 	def get_sens(self):
 		# Put LHS into the sens-list so that this:
@@ -2637,6 +2711,10 @@ module:
 				identifier: 'regs'
 				listof: #optional
 					$regs_decl: @module_add_local
+			tree:
+				identifier: 'initial'
+				listof: #optional
+					$statement: @module_add_initial
 		listof: #optional
 			$statement: @module_add_comb
 			$sync: @module_add_sync
@@ -2665,6 +2743,11 @@ class ParseModule:
 		if delta < 0:
 			i = stack.pop()
 			stack.last.add_local(i)
+
+	def module_add_initial(stack, ast, delta):
+		if delta < 0:
+			i = stack.pop()
+			stack.last.add_initial(i)
 
 	def module_add_comb(stack, ast, delta):
 		if delta < 0:
@@ -2964,8 +3047,7 @@ class ParseSync:
 @parser("""
 statement:
 	oneof:
-		oneof: @comb_create
-			$comb_assign: @comb_set
+		$comb_assign
 		$comb_if
 		$comb_for
 		$system
@@ -2973,14 +3055,7 @@ statement:
 		$macro_call
 """)
 class ParseStatement:
-	def comb_create(stack, ast, delta):
-		if delta > 0:
-			stack.push(Statement(ast))
-
-	def comb_set(stack, ast, delta):
-		if delta < 0:
-			i = stack.pop()
-			stack.last.set_comb(i)
+	pass
 
 @parser("""
 comb_if:

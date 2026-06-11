@@ -198,23 +198,41 @@ module test(
 	);
 	always @(a__c, b__c, a__d__b, b__d__b, b__d__a, a__d__a, c__e__d__a, c__f__d__a, c__f__c, c__e__c, c__f__d__b, c__e__d__b, c__g_0__d__a, c__h_1__d__a, c__h_1__c, c__g_0__c, c__h_1__d__b, c__g_0__d__b, d_1__g_0__d__a, d_0__h_1__d__a, d_0__h_1__d__b, d_1__g_0__d__b) begin
 		a__c <= b__c;
+		;
 		a__d__b <= b__d__b;
+		;
 		b__d__a <= a__d__a;
+		;
 		c__e__d__a <= c__f__d__a;
+		;
 		c__f__c <= c__e__c;
+		;
 		c__f__d__b <= c__e__d__b;
+		;
 		c__e__d__a <= c__f__d__a;
+		;
 		c__f__d__b <= c__e__d__b;
+		;
 		c__g_0__d__a <= c__h_1__d__a;
+		;
 		c__h_1__c <= c__g_0__c;
+		;
 		c__h_1__d__b <= c__g_0__d__b;
+		;
 		c__g_0__d__a <= c__h_1__d__a;
+		;
 		c__h_1__d__b <= c__g_0__d__b;
+		;
 		d_1__g_0__d__a <= d_0__h_1__d__a;
+		;
 		d_0__h_1__d__b <= d_1__g_0__d__b;
+		;
 		c__e__d__a <= a__d__a;
+		;
 		a__c <= c__e__c;
+		;
 		a__d__b <= c__e__d__b;
+		;
 	end
 endmodule
 
