@@ -2,6 +2,12 @@ interface: Intf
 	port: Master / Slave
 		a: net: inout / inout
 
+interface: Intf2
+	port: Master / Slave
+		a: Intf: Master / Slave
+
 module: test
 	port:
+		a: inout
 		b: Intf.Master
+		c: Intf2.Master
