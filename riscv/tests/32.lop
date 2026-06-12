@@ -1,0 +1,7 @@
+interface: Intf
+	port: Master / Slave
+		a: net: inout / inout
+
+module: test
+	port:
+		b: Intf.Master

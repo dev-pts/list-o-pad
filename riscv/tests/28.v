@@ -39,23 +39,23 @@ module test(
 	always @(posedge clk) begin
 		apb2_1__rdata <= 0;
 		apb2_1__ready <= 0;
-		some <= 1;
+		some <= apb_0__ready;
 		some2 <= some3[0];
-		some2[0] <= 1;
+		some2[0] <= apb_0__ready;
 		some3[1] <= some;
-		some2[0] <= 1;
+		some2[0] <= apb_0__ready;
 		some3[1] <= some;
-		some2[1] <= 1;
+		some2[1] <= apb_0__ready;
 		some3[1] <= some;
-		some2[0] <= 1;
+		some2[0] <= apb_0__ready;
 		some3[0] <= some;
-		some2[0] <= 1;
+		some2[0] <= apb_0__ready;
 		some3[1] <= some;
-		some2[0] <= 1;
+		some2[0] <= apb_0__ready;
 		some3[2] <= some;
-		some2[0] <= 1;
+		some2[0] <= apb_0__ready;
 		some3[0][0] <= some;
-		some2[0] <= 1;
+		some2[0] <= apb_0__ready;
 		some3[0][1] <= some;
 		if ((apb2_0__sel & apb2_0__enable) & (~apb2_0__ready)) begin
 			apb2_0__ready <= 1;

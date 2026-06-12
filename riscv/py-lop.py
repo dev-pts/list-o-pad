@@ -212,8 +212,6 @@ class InterfacePortDesc:
 		self.param = Scope()
 
 	def add_class(self, arg):
-		if arg in self._class:
-			raise Exception()
 		self._class.append(arg)
 
 	def set_width(self, arg):
@@ -234,7 +232,10 @@ class InterfacePortDesc:
 			return ret.compile()
 
 		ret2 = Port(self.ast)
-		ret2.set_dir(self._class[idx] + 'put')
+		cls = self._class[idx]
+		if cls != 'inout':
+			cls += 'put'
+		ret2.set_dir(cls)
 
 		ret = Array(self.ast)
 		ret.set_value(ret2)

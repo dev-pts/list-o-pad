@@ -24,7 +24,7 @@ interface: APB:
 				ready = 1
 
 		do(a, b, c) = block:
-			a = 1
+			a = ready
 			b = c
 
 module: test
