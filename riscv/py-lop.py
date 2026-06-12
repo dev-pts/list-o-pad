@@ -2169,8 +2169,8 @@ class Field:
 	def _get_mask(self):
 		return ((1 << self._get_size()) - 1) << self.lo.to_int()
 
-	def get_mask(self, mask):
-		if mask in self.perm:
+	def get_mask(self, perm):
+		if perm in self.perm:
 			return Number(self.ast, self._get_mask()).compile()
 
 		return Number(self.ast, 0).compile()
@@ -2248,15 +2248,15 @@ class Reg:
 	def get_size(self):
 		return Number(self.ast, self._get_bytes()).compile()
 
-	def get_mask(self, mask):
+	def get_mask(self, perm):
 		if self.perm:
-			if mask in self.perm:
+			if perm in self.perm:
 				return Number(self.ast, self._get_mask()).compile()
 			return Number(self.ast, 0).compile()
 
 		ret = 0
 		for i in self.scope.scope:
-			ret |= self.scope.lookup(i).get_mask(mask).to_int()
+			ret |= self.scope.lookup(i).get_mask(perm).to_int()
 		return Number(self.ast, ret).compile()
 
 	def resolve_hier(self, field):
