@@ -1023,11 +1023,7 @@ def sh_connect(ast, args):
 	return ret.compile()
 
 def sh_number(ast, args):
-	ret = Number(ast, args[0].to_int())
-	ret.width = args[1].to_int()
-	ret.base = args[2].value
-	ret.set_ibase()
-	return ret
+	return Number(ast, args[0].to_int(), args[1].to_int(), args[2].value)
 
 system['z'] = sh_z
 system['goto'] = sh_goto
@@ -1209,25 +1205,30 @@ class Identifier:
 
 @for_all_methods(wrap)
 class Number:
-	def __init__(self, ast, value):
+	def __init__(self, ast, value, width=None, base=None):
 		self.ast = ast
 		self.value = value
-		self.width = None
-		self.svalue = str(value)
-		self.base = None
+		self.width = width
+		self.base = base
+		self.svalue = None
 		self.ibase = None
 
 		try:
 			self.value = int(self.value)
-			self.width = self.value.bit_length()
+			if not self.width:
+				self.width = self.value.bit_length()
+			if self.base:
+				self.set_ibase()
 			return
 		except:
-			try:
-				self.value = float(self.value)
-				self.width = 1 << (sys.float_info.mant_dig).bit_length()
-				return
-			except:
-				pass
+			pass
+
+		try:
+			self.value = float(self.value)
+			self.width = 1 << (sys.float_info.mant_dig).bit_length()
+			return
+		except:
+			pass
 
 		self.width, self.base, self.svalue = re.findall(r'([0-9][_0-9]*)(.)([0-9a-f_]+)', self.value, re.IGNORECASE)[0]
 
@@ -1247,7 +1248,7 @@ class Number:
 			raise Exception(f'Unknown base "{self.base}"')
 
 	def compile(self):
-		return Number(self.ast, self.value)
+		return Number(self.ast, self.value, self.width, self.base)
 
 	def set_binded(self):
 		pass
@@ -1342,7 +1343,7 @@ class Number:
 		if base == 'x':
 			base = 'h'
 		ret += "'" + base
-		ret += self.svalue
+		ret += f'{{0:{self.base}}}'.format(self.to_int())
 		return ret
 
 	def get_sens(self):
@@ -2171,7 +2172,7 @@ class Field:
 
 	def get_mask(self, perm):
 		if perm in self.perm:
-			return Number(self.ast, self._get_mask()).compile()
+			return Number(self.ast, self._get_mask(), None, 'x').compile()
 
 		return Number(self.ast, 0).compile()
 
@@ -2251,13 +2252,13 @@ class Reg:
 	def get_mask(self, perm):
 		if self.perm:
 			if perm in self.perm:
-				return Number(self.ast, self._get_mask()).compile()
+				return Number(self.ast, self._get_mask(), None, 'x').compile()
 			return Number(self.ast, 0).compile()
 
 		ret = 0
 		for i in self.scope.scope:
 			ret |= self.scope.lookup(i).get_mask(perm).to_int()
-		return Number(self.ast, ret).compile()
+		return Number(self.ast, ret, None, 'x').compile()
 
 	def resolve_hier(self, field):
 		return self.scope.lookup(field.name)
