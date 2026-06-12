@@ -6,6 +6,8 @@ module SubModule_Z_10_B2_5(
 );
 	localparam Z = 10;
 	localparam B2 = 5;
+	reg _auto_p;
+	assign p = _auto_p;
 	always @(y) begin
 		y <= 1;
 	end

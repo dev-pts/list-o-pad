@@ -47,6 +47,8 @@ class Formatter:
 		self._cmd.append(-1)
 
 	def __iadd__(self, other):
+		if other == None:
+			return self
 		if type(other) == Formatter:
 			self._cmd += other._cmd
 		else:
@@ -54,6 +56,8 @@ class Formatter:
 		return self
 
 	def __add__(self, other):
+		if other == None:
+			return self
 		if type(other) == Formatter:
 			self._cmd += other._cmd
 		else:
@@ -423,6 +427,9 @@ class InterfaceInstance:
 		ret.proto = mname.translate(str.maketrans(".-", "_n"))
 		return ret
 
+	def is_inout(self):
+		return True
+
 	def dim(self):
 		return (None, None)
 
@@ -441,6 +448,22 @@ class InterfaceInstance:
 			ret.extend(i.resolve().get_ports(filter_dir, Hier(src.ast).set_namespace(src).set_field(Identifier(src.ast, i.name))))
 		return ret
 
+	def get_inouts(self, name, shape=(None, None)):
+		ret = Formatter()
+		count, _ = shape
+
+		for i in self.inst.port:
+			if count:
+				if count.to_int() == 0:
+					raise Exception()
+				if count.to_int() > 1:
+					for j in range(count.to_int()):
+						ret += i.resolve().get_inouts(f'{name}_{j}__{i.name}')
+			else:
+				ret += i.resolve().get_inouts(f'{name}__{i.name}')
+
+		return ret
+
 	def to_verilog_hier(self, namespace, field):
 		return f'{namespace.to_verilog()}__{field.name}'
 
@@ -457,8 +480,7 @@ class InterfaceInstance:
 			if count.to_int() == 0:
 				raise Exception()
 			if count.to_int() > 1:
-				for i in range(count.to_int()):
-					return ',\n'.join(self.inst.to_verilog(f'{name}_{i}') for i in range(count.to_int()))
+				return ',\n'.join(self.inst.to_verilog(f'{name}_{i}') for i in range(count.to_int()))
 
 		return self.inst.to_verilog(name)
 
@@ -578,6 +600,9 @@ class Module:
 		for i in self.const:
 			ret += f'localparam {i.name} = {i.value.to_verilog()};\n'
 
+		for i in self.port:
+			ret += i.value.get_inouts(i.name)
+
 		for i in self.local:
 			ret += i.value.to_verilog(i.name)
 
@@ -632,6 +657,9 @@ class Port:
 		ret.set_dir(self.dir)
 		return ret
 
+	def is_inout(self):
+		return self.dir == 'inout'
+
 	def set_binded(self):
 		pass
 
@@ -651,6 +679,22 @@ class Port:
 		if self.dir == filter_dir:
 			return [src]
 		return []
+
+	def get_inouts(self, name, shape=(None, None)):
+		if self.dir != 'inout':
+			return None
+
+		count, width = shape
+
+		ret = Formatter()
+		if count and count.to_int() > 1:
+			for i in range(count.to_int()):
+				ret += self._to_verilog_one('reg ', f'_auto_{name}', width, i) + ';\n'
+				ret += f'assign {name} = _auto_{name}_{i};\n'
+		else:
+			ret += self._to_verilog_one('reg ', f'_auto_{name}', width, None) + ';\n'
+			ret += f'assign {name} = _auto_{name};\n'
+		return ret
 
 	def _to_verilog_one(self, prefix, name, width, idx):
 		ret = prefix
@@ -733,6 +777,12 @@ class Net:
 			ret.set_value(self.value.compile())
 		return ret
 
+	def resolve(self):
+		return self
+
+	def is_inout(self):
+		return False
+
 	def set_binded(self):
 		self.binded = True
 
@@ -790,6 +840,12 @@ class FSM:
 		ret.set_lhs(src.namespace)
 		ret.set_rhs(Number(src.ast, 1 << self.state[src.field.name]))
 		return ret.compile()
+
+	def resolve(self):
+		return self
+
+	def is_inout(self):
+		return False
 
 	def resolve_hier(self, field):
 		return self
@@ -851,17 +907,15 @@ class Array:
 
 	def slice(self, hi, lo):
 		return None
-		if hi != lo:
-			raise Exception()
-		if hi == lo:
-			return self.value
-		raise Exception()
 
 	def dim(self):
 		return self.shape
 
 	def is_instance(self):
 		return self.value.is_instance()
+
+	def get_inouts(self, name):
+		return self.value.get_inouts(name, self.shape)
 
 	def to_verilog(self, name):
 		return self.value.to_verilog(name, self.shape)
@@ -1166,6 +1220,14 @@ class Identifier:
 
 	def clone(self):
 		return Identifier(self.ast, self.name)
+
+	def replace_inout(self):
+		if self.is_inout():
+			self.name = f'_auto_{self.name}'
+		return self
+
+	def is_inout(self):
+		return self.ref.resolve().is_inout()
 
 	def add_scope(self, exc):
 		if self.name in exc:
@@ -1548,7 +1610,7 @@ class Assign:
 
 	def compile(self):
 		ret = Assign(self.ast)
-		ret.set_lhs(self.lhs.compile())
+		ret.set_lhs(self.lhs.compile().replace_inout())
 		ret.set_rhs(self.rhs.compile())
 		return ret
 
@@ -1596,6 +1658,11 @@ class Bus:
 		for i in self.item:
 			ret.add(i.compile())
 		return ret
+
+	def replace_inout(self):
+		for i in self.item:
+			i.replace_inout()
+		return self
 
 	def operator(self, op, op2):
 		return None
@@ -1741,6 +1808,14 @@ class Hier:
 			ret.set_namespace(self.namespace.clone())
 		ret.set_field(self.field.clone())
 		return ret
+
+	def replace_inout(self):
+		if self.is_inout():
+			self.namespace.replace_inout()
+		return self
+
+	def is_inout(self):
+		return self.ref.resolve().is_inout()
 
 	def add_scope(self, exc):
 		return self
@@ -2017,6 +2092,14 @@ class Slice:
 		ret.set_value(value)
 		ret.set_hilo(hilo)
 		return ret
+
+	def replace_inout(self):
+		if self.is_inout():
+			self.value.replace_inout()
+		return self
+
+	def is_inout(self):
+		return self.value.is_inout()
 
 	def operator(self, op, op2):
 		return self.resolve().operator(op, op2)

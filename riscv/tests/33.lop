@@ -1,0 +1,30 @@
+module: SubModule
+	port:
+		a: inout
+
+interface: Intf
+	port: Master / Slave
+		a: net[3]: inout / inout
+
+interface: Intf2
+	port: Master / Slave
+		a: Intf: Master / Slave
+
+module: test
+	port:
+		a: inout
+		b: Intf.Master
+		c[2]: Intf2.Master
+		e: out
+		f[2]: inout[4]
+	local:
+		d: SubModule
+
+	$bind(d.a, a)
+
+	a = 1
+	{ a, e, c[0].a.a } = 1
+	b.a = 1
+	c[1].a.a = 1
+
+	f[0] = 1
