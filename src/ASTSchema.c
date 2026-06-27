@@ -153,22 +153,7 @@ struct CEContext {
 
 static bool check_optional(struct Context *ctx, struct SchemaNode *sn)
 {
-	if (sn->optional) {
-		return true;
-	}
-
-	switch (sn->sn_type) {
-	case SN_TYPE_ONEOF:
-	case SN_TYPE_LISTOF:
-	case SN_TYPE_SEQOF:
-		return false;
-	case SN_TYPE_REF:
-		return check_optional(ctx, ctx->kv->children[sn->ref].value);
-	case SN_TYPE_AST:
-		return false;
-	default:
-		assert(0);
-	}
+	return sn->optional;
 }
 
 /* "Close" SNs, until it's AST */
