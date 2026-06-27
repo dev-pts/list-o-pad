@@ -159,12 +159,9 @@ static bool check_optional(struct Context *ctx, struct SchemaNode *sn)
 /* "Close" SNs, until it's AST */
 static bool sn_ast_up(struct Context *ctx, struct CEContext *cec)
 {
-	struct CEContext *save = cec;
 	struct CEContext *cecp = cec->parent;
 
 	while (cecp) {
-		handler_add(ctx->hl, cecp->sn, NULL, -1);
-
 		switch (cecp->sn->sn_type) {
 		case SN_TYPE_ONEOF:
 		case SN_TYPE_LISTOF:
@@ -183,17 +180,17 @@ static bool sn_ast_up(struct Context *ctx, struct CEContext *cec)
 		if (cecp->sn->sn_type == SN_TYPE_AST) {
 			break;
 		}
+
+		handler_add(ctx->hl, cecp->sn, NULL, -1);
+
 		cec = cecp;
 		cecp = cecp->parent;
 	}
 
 	if (!cecp) {
-		save->sn = NULL;
-		save->parent = NULL;
 		return true;
 	}
 
-	*save = *cecp;
 	return true;
 }
 
@@ -219,7 +216,10 @@ static bool check_entry(struct Context *ctx, struct LOP_ASTNode *ast, struct CEC
 	ast->sn = sn;
 
 	if (0) {
+		printf("----------------- 1 ------------------\n");
+		printf("SN:\n");
 		dump_sn_recurse(sn, 0, ctx->kv);
+		printf("AST:\n");
 		LOP_dump_ast(ast);
 	}
 
@@ -281,17 +281,13 @@ static bool check_entry(struct Context *ctx, struct LOP_ASTNode *ast, struct CEC
 
 				if (LOP_list_head(ast)) {
 					if (check_entry(ctx, LOP_list_head(ast), &cec_next)) {
-						return true;
+						break;
 					}
 				}
 
 				if (!check_optional(ctx, sn->child[i])) {
 					goto mismatch;
 				}
-			}
-
-			if (LOP_list_head(ast)) {
-				goto mismatch;
 			}
 
 			handler_add(hl, sn, NULL, -1);
@@ -313,35 +309,29 @@ static bool check_entry(struct Context *ctx, struct LOP_ASTNode *ast, struct CEC
 	ast->parsed = 2;
 
 	struct LOP_ASTNode *next_ast = ast->next;
-	struct CEContext cec2 = *cec;
 
-	while (next_ast == NULL) {
-		if (!sn_ast_up(ctx, &cec2)) {
+	if (next_ast == NULL) {
+		if (!sn_ast_up(ctx, cec)) {
 			goto mismatch;
 		}
 		ast = ast->parent;
 		if (ast) {
 			ast->parsed = 2;
 		}
-		if (!ast) {
-			assert(cec2.sn == NULL);
-			return true;
-		}
-		next_ast = ast->next;
+		return true;
 	}
 
-	cec = &cec2;
-
 	struct CEContext *save;
-
-	assert(next_ast);
 
 	if (next_ast->parsed == 0) {
 		next_ast->parsed = 1;
 	}
 
 	if (0) {
+		printf("----------------- 2 ------------------\n");
+		printf("SN:\n");
 		dump_sn_recurse(sn, 0, ctx->kv);
+		printf("AST:\n");
 		LOP_dump_ast(next_ast);
 	}
 
@@ -365,7 +355,10 @@ again:
 	cec_next.parent = cec;
 
 	if (0) {
+		printf("----------------- 3 ------------------\n");
+		printf("SN:\n");
 		dump_sn_recurse(sn, 0, ctx->kv);
+		printf("AST:\n");
 		LOP_dump_ast(next_ast);
 	}
 
@@ -413,8 +406,6 @@ again:
 		}
 		goto mismatch;
 	}
-
-	assert(sn->sn_type != SN_TYPE_REF);
 
 mismatch:
 	handler_resize(hl, hl_count);
@@ -489,8 +480,6 @@ int LOP_init(struct LOP *lop, const char *src, size_t len)
 
 	/* Apply sn to the AST and get a tree of handlers to call */
 	if (check_entry(&lop_ctx, ast, &cec)) {
-		assert(lop->hl.count);
-
 		lop->ast = ast;
 	} else {
 		struct LOP_ASTNode *err = ast_find_err(ast);

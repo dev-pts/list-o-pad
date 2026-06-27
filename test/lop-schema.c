@@ -7,21 +7,27 @@ static int cb_dummy(struct LOP_Handler *h)
 {
 	static int delta;
 
-	if (h->delta != -1) {
-		for (int i = 0; i < delta; i++) {
-			printf("\t");
-		}
+	if (h->delta < 0) {
+		delta += h->delta;
+	}
+
+	for (int i = 0; i < delta; i++) {
+		printf("\t");
 	}
 
 	if (h->delta == 1) {
-		printf("%s\n", h->key);
+		printf("+%s\n", h->key);
 	} else if (h->delta == 0) {
 		if (h->n->type > LOP_TYPE_LIST_LAST) {
-			printf("%s %s\n", h->key, LOP_symbol_value(h->n));
+			printf("=%s(%s)\n", h->key, LOP_symbol_value(h->n));
 		}
+	} else {
+		printf("-%s\n", h->key);
 	}
 
-	delta += h->delta;
+	if (h->delta > 0) {
+		delta += h->delta;
+	}
 	return 0;
 }
 
