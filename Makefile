@@ -26,7 +26,6 @@ test/lop-ast: test/lop-ast.o liblop.a
 
 clean:
 	rm -f src/*.o
-	rm -f src/lex.yy.c
 	rm -f util/*.o
 	rm -f test/*.o
 	rm -f liblop.*
